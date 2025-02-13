@@ -15,7 +15,10 @@ import torch_geometric
 from .graphbuilder.graphtft import graphmodel as GraphTFT
 from .graphbuilder.graphrecursive import graphmodel as SimpleGraph
 from .graphbuilder.graphseq2seq import graphmodel as GraphSeq2Seq
+from .configs.sample_config import print_sample_config
 
+def show_config_template():
+    print_sample_config()
 
 class gml(object):
     def __init__(self, config):
