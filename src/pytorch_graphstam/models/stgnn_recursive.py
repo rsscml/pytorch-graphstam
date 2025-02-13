@@ -1,7 +1,7 @@
 import torch
 import torch_geometric
-from heterosageconv import HeteroGraphSAGE
-from hgtconv import HGT
+from .heterosageconv import HeteroGraphSAGE
+from .hgtconv import HGT
 
 
 class STGNN(torch.nn.Module):

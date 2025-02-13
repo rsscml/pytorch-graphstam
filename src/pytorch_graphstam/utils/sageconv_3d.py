@@ -9,7 +9,7 @@ from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn.dense.linear import Linear
 from torch_geometric.typing import Adj, OptPairTensor, Size, SparseTensor
 from torch_geometric.utils import spmm
-from tft_components import apply_time_distributed
+from .tft_components import apply_time_distributed
 
 class SAGEConv3D(MessagePassing, ABC):
     r"""The GraphSAGE operator from the `"Inductive Representation Learning on

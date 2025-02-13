@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import torch_geometric
 from ..utils.tft_components import *
-from heterosageconv_3d import HeteroGraphSAGE
+from .heterosageconv_3d import HeteroGraphSAGE
 
 class STGNN(torch.nn.Module):
     def __init__(self,
