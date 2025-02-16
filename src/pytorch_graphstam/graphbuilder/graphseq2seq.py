@@ -188,11 +188,11 @@ class graphmodel:
         # extract column sets from col_dict
         # hierarchy specific keys
         self.id_col = self.col_dict.get('id_col')
-        self.key_combinations = self.col_dict.get('key_combinations')
+        self.key_combinations = self.col_dict.get('key_combinations', [(self.id_col,)])
         self.key_hierarchy = self.col_dict.get('key_hierarchy', None)
         self.key_combination_weights = self.col_dict.get('key_combination_weights', None)
-        self.lowest_key_combination = self.col_dict.get('lowest_key_combination')
-        self.highest_key_combination = self.col_dict.get('highest_key_combination')
+        self.lowest_key_combination = self.col_dict.get('lowest_key_combination', (self.id_col,))
+        self.highest_key_combination = self.col_dict.get('highest_key_combination', (self.id_col,))
         self.new_key_cols = []
         self.key_weights_dict = {}
         self.key_levels_dict = {}
