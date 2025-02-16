@@ -280,7 +280,7 @@ class gml(object):
         for i, q in enumerate(quantiles_list):
             forecast_df = self.gmlobj.infer(infer_start=infer_start, infer_end=infer_end, select_quantile=q)
             # clip forecasts
-            forecast_df['forcast'] = np.clip(forecast_df['forcast'], a_min=forecast_lower_bound, a_max=forecast_upper_bound)
+            forecast_df['forcast'] = np.clip(forecast_df['forecast'], a_min=forecast_lower_bound, a_max=forecast_upper_bound)
             if i > 0:
                 forecast_df.rename(columns={'forecast': f'forecast_{q}'}, inplace=True)
             forecast_list.append(forecast_df)
