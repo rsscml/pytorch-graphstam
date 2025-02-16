@@ -2812,7 +2812,10 @@ class graphmodel:
         self.change_device(device="cuda")
         torch.backends.cudnn.enabled = False
 
-    def infer(self, infer_start, infer_end, select_quantile):
+    def infer(self, infer_start, infer_end, select_quantile, best_model=None):
+
+        if best_model is None:
+            best_model = self.best_model
 
         base_df = self.onetime_prep_df
 
@@ -2847,7 +2850,7 @@ class graphmodel:
 
             # infer dataset creation
             infer_df, infer_dataset = self.create_infer_dataset(base_df, infer_start=t)
-            output = infer_fn(self.model, self.best_model, infer_dataset)
+            output = infer_fn(self.model, best_model, infer_dataset)
 
             # select output quantile
             output_arr = output[0]
@@ -2904,7 +2907,10 @@ class graphmodel:
 
         return forecast_df
 
-    def infer_sim(self, infer_start, infer_end, select_quantile, sim_df):
+    def infer_sim(self, infer_start, infer_end, select_quantile, sim_df, best_model=None):
+
+        if best_model is None:
+            best_model = self.best_model
 
         # get list of infer periods
         infer_periods = sorted(
@@ -2935,7 +2941,7 @@ class graphmodel:
 
             # infer dataset creation
             infer_df, infer_dataset = self.create_infer_dataset(sim_df, infer_start=t)
-            output = infer_fn(self.model, self.best_model, infer_dataset)
+            output = infer_fn(self.model, best_model, infer_dataset)
 
             # select output quantile
             output_arr = output[0]

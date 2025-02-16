@@ -1,17 +1,7 @@
-
-import json
 import os
 import pandas as pd
 import numpy as np
-import gc
 import copy
-import sklearn
-from joblib import Parallel, delayed
-import itertools
-import inspect
-import torch
-import torch_geometric
-
 from .graphbuilder.graphtft import graphmodel as GraphTFT
 from .graphbuilder.graphrecursive import graphmodel as SimpleGraph
 from .graphbuilder.graphseq2seq import graphmodel as GraphSeq2Seq
@@ -104,7 +94,7 @@ class gml(object):
                                       lag_offset = 0,
                                       rolling_features_list = self.rolling_features,
                                       min_history = 1,
-                                      fh = fh,
+                                      fh = 1,
                                       recursive = True,
                                       batch_size = 1000,
                                       subgraph_sampling = False,
