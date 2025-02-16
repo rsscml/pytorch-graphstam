@@ -2229,7 +2229,7 @@ class graphmodel:
                 current_min_loss = np.min(val_loss_hist)
                 delta = current_min_loss - prev_min_loss
 
-                save_condition = ((val_loss_hist[epoch] == np.min(val_loss_hist)) and (-delta > min_delta) and (train_loss_hist[epoch] == np.min(train_loss_hist))) or (epoch == 0)
+                save_condition = ((val_loss_hist[epoch] == np.min(val_loss_hist)) and (-delta > min_delta)) or (epoch == 0)  # and (train_loss_hist[epoch] == np.min(train_loss_hist))
 
             else:
                 train_loss_hist.append(loss)
@@ -2245,7 +2245,7 @@ class graphmodel:
                 current_min_metric = np.min(val_metric_hist)
                 delta = current_min_metric - prev_min_metric
 
-                save_condition = ((val_metric_hist[epoch] == np.min(val_metric_hist)) and (-delta > min_delta) and (train_loss_hist[epoch] == np.min(train_loss_hist))) or (epoch == 0)
+                save_condition = ((val_metric_hist[epoch] == np.min(val_metric_hist)) and (-delta > min_delta)) or (epoch == 0) # and (train_loss_hist[epoch] == np.min(train_loss_hist))
 
             print("Improvement delta (min_delta {}):  {}".format(min_delta, delta))
 
