@@ -276,7 +276,7 @@ class gml(object):
                           sample_weights=sample_weights,
                           stop_training_criteria=stop_training_criteria)
 
-    def infer(self, forecast_lower_bound=0, forecast_upper_bound=np.inf):
+    def infer(self, forecast_filepath, forecast_lower_bound=0, forecast_upper_bound=np.inf):
         """
         Loads the best saved model from 'train' run & performs inference based on infer_config
         :return: dataframe with forecasts
@@ -284,7 +284,7 @@ class gml(object):
         infer_start = self.infer_config["infer_start"]
         infer_end = self.infer_config["infer_end"]
         quantiles_list =  self.infer_config.get("quantiles", [0.5])
-        forecast_filepath = self.infer_config["forecast_filepath"]
+        forecast_filepath = self.infer_config.get("forecast_filepath", forecast_filepath)
 
         forecast_list = []
         for i, q in enumerate(quantiles_list):

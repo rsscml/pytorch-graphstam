@@ -131,7 +131,7 @@ scheduler_params_config = {
 # infer_start: Str or int datetime/timeindex value from which to start generating forecast.
 # infer_end: Forecast generation stops after this period
 # quantiles: Forecast Quantiles to output; can be omitted if Quantiles don't apply, for e.g. with non-Quantile loss types.
-# forecast_filepath: Forecasts are written here
+# forecast_filepath: Forecasts are written here; can be omitted from config & instead be provided as argument to the gml.infer method
 
 infer_config = {
                 infer_start: str,int,
