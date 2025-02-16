@@ -40,7 +40,7 @@ class gml(object):
         interleave = self.data_config.get("interleave", 1)
         recency_weights = self.data_config.get("recency_weights", False)
         recency_alpha = self.data_config.get("recency_alpha", 1)
-        data_parallel_processes = int(os.cpu_count() / 2)
+        data_parallel_processes = int(os.cpu_count() / 1.5)
 
         # create graphmodel object
         if self.model_type == 'GraphTFT':
