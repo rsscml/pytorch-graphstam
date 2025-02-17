@@ -33,6 +33,9 @@ class gml(object):
         try:
             if not os.path.exists(self.project_dir):
                 os.makedirs(self.project_dir)
+            # also make models & logs dir under project_dir
+            os.makedirs(f"{self.project_dir}/models")
+            os.makedirs(f"{self.project_dir}/logs")
         except OSError as e:
             print(f"Error creating working dir: {e}")
             return
@@ -263,7 +266,7 @@ class gml(object):
         max_epochs = self.train_config.get("max_epochs", 100)
         patience = self.train_config.get("patience", 10)
         min_delta = self.train_config.get("min_delta", 0)
-        model_prefix = self.train_config.get("model_prefix", f"./{self.model_type}")
+        model_prefix = self.train_config.get("model_prefix", f"{self.model_type}")
         loss = self.train_config.get("loss_type", 'Quantile')
         delta = self.train_config.get("huber_delta", 0.5)
         use_amp = self.train_config.get("use_amp", False)
@@ -281,7 +284,7 @@ class gml(object):
                                       max_epochs=max_epochs,
                                       patience=patience,
                                       min_delta=min_delta,
-                                      model_prefix=model_prefix,
+                                      model_prefix=f"{self.project_dir}/models/{model_prefix}",
                                       max_batch_size=max_batch_size,
                                       loss_type=loss,
                                       delta=delta,
@@ -297,7 +300,7 @@ class gml(object):
                               max_epochs=max_epochs,
                               patience=patience,
                               min_delta=min_delta,
-                              model_prefix=model_prefix,
+                              model_prefix=f"{self.project_dir}/models/{model_prefix}",
                               loss_type=loss,
                               delta=delta,
                               use_amp=use_amp,

@@ -134,10 +134,10 @@ scheduler_params_config = {
 # forecast_filepath: Forecasts are written here; can be omitted from config & instead be provided as argument to the gml.infer method
 
 infer_config = {
-                infer_start: str,int,
-                infer_end: str,int,
-                quantiles: list of float,
-                forecast_filepath: str
+                "infer_start": str,int,
+                "infer_end": str,int,
+                "quantiles": list of float,
+                "forecast_filepath": str
 }
 
 # model_type
