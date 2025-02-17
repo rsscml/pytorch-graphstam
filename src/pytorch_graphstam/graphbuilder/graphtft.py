@@ -1721,7 +1721,6 @@ class graphmodel:
               num_layers=1,
               num_attn_layers=1,
               num_rnn_layers=1,
-              attention_window=None,
               heads=1,
               forecast_quantiles=None,
               dropout=0,
@@ -2284,7 +2283,6 @@ class graphmodel:
                       max_batch_size=None,
                       loss_type='Quantile',  # 'Tweedie','RMSE'
                       delta=1.0,  # for Huber
-                      epsilon=0.01,  # for SMAPE
                       use_amp=False,
                       use_lr_scheduler=True,
                       scheduler_params=None,

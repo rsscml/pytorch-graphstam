@@ -251,20 +251,40 @@ class gml(object):
         scheduler_params = self.train_config.get("scheduler_params", default_scheduler_params)
         sample_weights = self.train_config.get("sample_weights", False)
         stop_training_criteria = self.train_config.get("stop_training_criteria", 'loss')
+        # for batched training -- only for TFT
+        batched_train = self.model_config.get("batched_train", False)
+        max_batch_size = self.train_config.get("max_batch_size", None)
 
-        self.gmlobj.train(lr=lr,
-                          min_epochs=min_epochs,
-                          max_epochs=max_epochs,
-                          patience=patience,
-                          min_delta=min_delta,
-                          model_prefix=model_prefix,
-                          loss_type=loss,
-                          delta=delta,
-                          use_amp=use_amp,
-                          use_lr_scheduler=use_lr_scheduler,
-                          scheduler_params=scheduler_params,
-                          sample_weights=sample_weights,
-                          stop_training_criteria=stop_training_criteria)
+        if self.model_type == 'GraphTFT' and batched_train:
+            self.gmlobj.batched_train(lr=lr,
+                                      min_epochs=min_epochs,
+                                      max_epochs=max_epochs,
+                                      patience=patience,
+                                      min_delta=min_delta,
+                                      model_prefix=model_prefix,
+                                      max_batch_size=max_batch_size,
+                                      loss_type=loss,
+                                      delta=delta,
+                                      use_amp=use_amp,
+                                      use_lr_scheduler=use_lr_scheduler,
+                                      scheduler_params=scheduler_params,
+                                      sample_weights=sample_weights,
+                                      stop_training_criteria=stop_training_criteria)
+
+        else:
+            self.gmlobj.train(lr=lr,
+                              min_epochs=min_epochs,
+                              max_epochs=max_epochs,
+                              patience=patience,
+                              min_delta=min_delta,
+                              model_prefix=model_prefix,
+                              loss_type=loss,
+                              delta=delta,
+                              use_amp=use_amp,
+                              use_lr_scheduler=use_lr_scheduler,
+                              scheduler_params=scheduler_params,
+                              sample_weights=sample_weights,
+                              stop_training_criteria=stop_training_criteria)
 
     def infer(self, forecast_filepath, forecast_lower_bound=0, forecast_upper_bound=np.inf):
         """
