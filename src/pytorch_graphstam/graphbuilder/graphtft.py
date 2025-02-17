@@ -48,6 +48,10 @@ except ImportError:
 import warnings
 warnings.filterwarnings("ignore")
 
+import logging
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
 def quit_function(fn_name):
     # print to stderr, unbuffered in Python 2.
     print('{0} took too long'.format(fn_name), file=sys.stderr)
@@ -82,6 +86,7 @@ if os_type == 'linux':
 else:
     backend = 'loky'
     timeout = 3600
+
 
 # Graph Object
 class graphmodel:
@@ -319,8 +324,8 @@ class graphmodel:
                         df[col] = df[col].astype(np.float64)
         end_mem = df.memory_usage().sum() / 1024 ** 2
         if verbose:
-            print('Mem. usage decreased to {:5.2f} Mb ({:.1f}% reduction)'.format(end_mem, 100 * (
-                    start_mem - end_mem) / start_mem))
+            #print('Mem. usage decreased to {:5.2f} Mb ({:.1f}% reduction)'.format(end_mem, 100 * (start_mem - end_mem) / start_mem))
+            logger.info('Mem. usage decreased to {:5.2f} Mb ({:.1f}% reduction)'.format(end_mem, 100 * (start_mem - end_mem) / start_mem))
         return df
 
     def check_data_sufficiency(self, df):
@@ -348,9 +353,14 @@ class graphmodel:
             for key, _ in self.key_levels_dict.items():
                 self.key_levels_weight_dict[key] = 1
 
-        print("created new key cols: ", self.new_key_cols)
-        print("created new key to subkeys mapping: ", self.key_levels_dict)
-        print("covariates applied at this key level: ", self.covar_key_level)
+        #print("created new key cols: ", self.new_key_cols)
+        #print("created new key to subkeys mapping: ", self.key_levels_dict)
+        #print("covariates applied at this key level: ", self.covar_key_level)
+
+        logger.info("created new key cols: ", self.new_key_cols)
+        logger.info("created new key to subkeys mapping: ", self.key_levels_dict)
+        logger.info("covariates applied at this key level: ", self.covar_key_level)
+
         return df
 
     def create_new_targets(self, df):
@@ -365,7 +375,8 @@ class graphmodel:
             return wt_sum
 
         if self.wt_col is not None:
-            print("creating weights at all key levels")
+            #print("creating weights at all key levels")
+            logger.info("creating weights at all key levels")
             for key in self.new_key_cols:
                 grouped_key_weight = df.groupby([key]).apply(lambda x: select_latest_weight(x))
                 df[f'{key}_weight'] = df[key].map(grouped_key_weight)
@@ -440,7 +451,8 @@ class graphmodel:
                 key_levels_weight_dict[k] = total_keys / df[df['key_level'] == k][self.id_col].nunique()
 
         df['Key_Level_Weight'] = df['key_level'].map(key_levels_weight_dict)
-        print("Derived key_level weights: \n", key_levels_weight_dict)
+        #print("Derived key_level weights: \n", key_levels_weight_dict)
+        logger.info("Derived key_level weights: \n", key_levels_weight_dict)
 
         """
         # user assigned
@@ -451,12 +463,14 @@ class graphmodel:
         if self.wt_col is None:
             df['Key_Weight'] = 1
         else:
-            print("check key weights ...")
+            #print("check key weights ...")
+            logger.info("check key weights ...")
             for key_level in df['key_level'].unique().tolist():
                 null_status = df[df['key_level'] == key_level][self.wt_col].isnull().any()
                 min_wt = df[df['key_level'] == key_level][self.wt_col].min()
                 max_wt = df[df['key_level'] == key_level][self.wt_col].max()
-                print(f"Level {key_level} null weights present: {null_status}. Min-Max weights: {min_wt} - {max_wt}")
+                #print(f"Level {key_level} null weights present: {null_status}. Min-Max weights: {min_wt} - {max_wt}")
+                logger.info(f"Level {key_level} null weights present: {null_status}. Min-Max weights: {min_wt} - {max_wt}")
             # TODO -- test better weight distribution scheme. Overriding for now
             # df['Key_Weight'] = np.where(df['key_level'] == self.covar_key_level, df[self.wt_col], 1)
             df['Key_Weight'] = df[self.wt_col]
@@ -493,13 +507,14 @@ class graphmodel:
                 try:
                     opt = sp.optimize.minimize_scalar(loglike_p, bounds=(1.02, 1.95), method='Bounded')
                 except RuntimeWarning as e:
-                    print(f'There was a RuntimeWarning: {e}')
-
+                    #print(f'There was a RuntimeWarning: {e}')
+                    logger.info(f'There was a RuntimeWarning: {e}')
                 return opt.x
 
             # optimization loop
             power = init_power
-            print("initializing with power: ", power)
+            #print("initializing with power: ", power)
+            logger.info("initializing with power: ", power)
             for i in range(max_iterations):
 
                 res_mu, res_scale, res_endog = glm_fit(endog, exog, power)
@@ -508,14 +523,17 @@ class graphmodel:
                 # check if new power has converged
                 if abs(new_power - power) >= 0.001:
                     power = new_power
-                    print("iteration {}, updated power to: {}".format(i, power))
+                    #print("iteration {}, updated power to: {}".format(i, power))
+                    logger.info("iteration {}, updated power to: {}".format(i, power))
                 else:
-                    print("iteration {}, new_power unaccepted: {}".format(i, new_power))
+                    #print("iteration {}, new_power unaccepted: {}".format(i, new_power))
+                    logger.info("iteration {}, new_power unaccepted: {}".format(i, new_power))
                     break
             df['tweedie_p'] = round(power, 2)
 
         except:
-            print("using default power of {} for {}".format(1.5, df[self.id_col].unique()))
+            #print("using default power of {} for {}".format(1.5, df[self.id_col].unique()))
+            logger.info("using default power of {} for {}".format(1.5, df[self.id_col].unique()))
             df['tweedie_p'] = 1.5
 
         # clip tweedie to within range
@@ -697,7 +715,8 @@ class graphmodel:
             For Tweedie loss, log1p transform is taken after scaling.
             Log1p transformation itself is optional.
             """
-            print("   log1p transforming target ...")
+            #print("   log1p transforming target ...")
+            logger.info("   log1p transforming target ...")
             df[self.target_col] = np.log1p(df[self.target_col])
         else:
             pass
@@ -993,57 +1012,68 @@ class graphmodel:
 
     def preprocess(self, data):
 
-        print("preprocessing dataframe - check for null columns...")
+        #print("preprocessing dataframe - check for null columns...")
+        logger.info("preprocessing dataframe - check for null columns...")
         # check null
         null_status, null_cols = self.check_null(data)
         if null_status:
-            print("NaN column(s): ", null_cols)
+            #print("NaN column(s): ", null_cols)
+            logger.info("NaN column(s): ", null_cols)
             raise ValueError("Column(s) with NaN detected!")
         # check data sufficiency
         df = self.check_data_sufficiency(data)
         # create new keys
-        print("preprocessing dataframe - creating aggregate keys...")
+        #print("preprocessing dataframe - creating aggregate keys...")
+        logger.info("preprocessing dataframe - creating aggregate keys...")
         df = self.create_new_keys(df)
         # create new targets
-        print("preprocessing dataframe - creating new targets for aggregate keys...")
+        #print("preprocessing dataframe - creating new targets for aggregate keys...")
+        logger.info("preprocessing dataframe - creating new targets for aggregate keys...")
         df = self.create_new_targets(df)
         # create keybom
-        print("preprocessing dataframe - creating key bom...")
+        #print("preprocessing dataframe - creating key bom...")
+        logger.info("preprocessing dataframe - creating key bom...")
         if self.key_hierarchy is None:
             df_keybom = self.get_keybom(df)
         else:
             df_keybom = self.get_keybom_hierarchy(df)
         # stack subkey level dfs into one df
-        print("preprocessing dataframe - consolidating all keys into one df...")
+        #print("preprocessing dataframe - consolidating all keys into one df...")
+        logger.info("preprocessing dataframe - consolidating all keys into one df...")
         df = self.stack_key_level_dataframes(df, df_keybom)
         # del keybom
         del df_keybom
         gc.collect()
         # sort
-        print("preprocessing dataframe - sort by datetime & id...")
+        #print("preprocessing dataframe - sort by datetime & id...")
+        logger.info("preprocessing dataframe - sort by datetime & id...")
         df = self.sort_dataset(df)
         if self.log1p_transform:
             # estimate tweedie p
             if self.estimate_tweedie_p:
-                print("estimating tweedie p using GLM ...")
+                #print("estimating tweedie p using GLM ...")
+                logger.info("estimating tweedie p using GLM ...")
                 df = self.parallel_tweedie_p_estimate(df)
                 # apply power correction if required
                 # print("   applying tweedie p correction for continuous ts, if applicable ...")
                 # df = self.apply_agg_power_correction(df)
             # scale dataset
-            print("preprocessing dataframe - scale numeric cols...")
+            #print("preprocessing dataframe - scale numeric cols...")
+            logger.info("preprocessing dataframe - scale numeric cols...")
             df = self.scale_dataset(df)
             # apply log1p transform
             df = self.log1p_transform_target(df)
         else:
             # estimate tweedie p
             if self.estimate_tweedie_p:
-                print("estimating tweedie p using GLM ...")
+                #print("estimating tweedie p using GLM ...")
+                logger.info("estimating tweedie p using GLM ...")
                 df = self.parallel_tweedie_p_estimate(df)
                 # apply power correction if required
                 # print("   applying tweedie p correction for continuous ts, if applicable ...")
                 # df = self.apply_agg_power_correction(df)
-            print("preprocessing dataframe - scale numeric cols...")
+            #print("preprocessing dataframe - scale numeric cols...")
+            logger.info("preprocessing dataframe - scale numeric cols...")
             df = self.scale_dataset(df)
 
         # add a dummy global context col if it's empty
@@ -1052,9 +1082,11 @@ class graphmodel:
             df['dummy_global_context'] = "dummy_context"
 
         # onehot encode
-        print("preprocessing dataframe - onehot encode categorical columns...")
+        #print("preprocessing dataframe - onehot encode categorical columns...")
+        logger.info("preprocessing dataframe - onehot encode categorical columns...")
         df = self.onehot_encode(df)
-        print("preprocessing dataframe - gather node specific feature cols...")
+        #print("preprocessing dataframe - gather node specific feature cols...")
+        logger.info("preprocessing dataframe - gather node specific feature cols...")
         # get onehot features
         for node in self.node_cols:
 
@@ -1069,15 +1101,23 @@ class graphmodel:
                 onehot_col_features = [col for col in df.columns.tolist() if col.startswith(onehot_cols_prefix)]
                 self.unknown_onehot_cols += onehot_col_features
 
-        print("\npreprocessed known_onehot_cols: ", self.known_onehot_cols)
-        print("\npreprocessed unknown_onehot_cols: ", self.unknown_onehot_cols)
-        print("\npreprocessed global_context_onehot_cols: ", self.global_context_onehot_cols)
-        print("\npreprocessed temporal_known_num_col_list: ", self.temporal_known_num_col_list)
-        print("\npreprocessed temporal_unknown_num_col_list: ", self.temporal_unknown_num_col_list)
-        print("\nTotal Keys across hierarchy: ", df[self.id_col].nunique())
+        #print("\npreprocessed known_onehot_cols: ", self.known_onehot_cols)
+        #print("\npreprocessed unknown_onehot_cols: ", self.unknown_onehot_cols)
+        #print("\npreprocessed global_context_onehot_cols: ", self.global_context_onehot_cols)
+        #print("\npreprocessed temporal_known_num_col_list: ", self.temporal_known_num_col_list)
+        #print("\npreprocessed temporal_unknown_num_col_list: ", self.temporal_unknown_num_col_list)
+        #print("\nTotal Keys across hierarchy: ", df[self.id_col].nunique())
+
+        logger.info("preprocessed known_onehot_cols: ", self.known_onehot_cols)
+        logger.info("preprocessed unknown_onehot_cols: ", self.unknown_onehot_cols)
+        logger.info("preprocessed global_context_onehot_cols: ", self.global_context_onehot_cols)
+        logger.info("preprocessed temporal_known_num_col_list: ", self.temporal_known_num_col_list)
+        logger.info("preprocessed temporal_unknown_num_col_list: ", self.temporal_unknown_num_col_list)
+        logger.info("Total Keys across hierarchy: ", df[self.id_col].nunique())
 
         for k in df['key_level'].unique().tolist():
-            print("Total Keys for level {}: {}".format(k, df[df['key_level'] == k][self.id_col].nunique()))
+            #print("Total Keys for level {}: {}".format(k, df[df['key_level'] == k][self.id_col].nunique()))
+            logger.info("Total Keys for level {}: {}".format(k, df[df['key_level'] == k][self.id_col].nunique()))
 
         return df
 
@@ -1158,10 +1198,13 @@ class graphmodel:
             temporal_unknown_onehot_col_dict[unknown_onehot_col] = df_snap_unknown_onehot_col
 
         # drop numeric & onehot cols from df_snap & de-duplicate
-        print("df_snap pre-dedup size: ", df_snap.shape)
+        #print("df_snap pre-dedup size: ", df_snap.shape)
+        logger.info("df_snap pre-dedup size: ", df_snap.shape)
         df_snap = df_snap[df_snap[self.time_index_col] == period]
-        print("df_snap post-dedup size: ", df_snap.shape)
-        print("df_snap columns: ", df_snap.columns)
+        #print("df_snap post-dedup size: ", df_snap.shape)
+        #print("df_snap columns: ", df_snap.columns)
+        logger.info("df_snap post-dedup size: ", df_snap.shape)
+        logger.info("df_snap columns: ", df_snap.columns)
 
         # index nodes
         col_map_dict = self.node_indexing(df_snap,
@@ -1190,7 +1233,8 @@ class graphmodel:
         keybom_nested = torch.nested.nested_tensor(list(df_snap['mapped_key_list_arr'].values), dtype=torch.int16,
                                                    requires_grad=False)
         keybom_padded = torch.nested.to_padded_tensor(keybom_nested, -1)
-        print("key_bom padded tensor created")
+        #print("key_bom padded tensor created")
+        logger.info("key_bom padded tensor created")
 
         # node features
         data[self.target_col].x = torch.tensor(df_snap_target.to_numpy(), dtype=torch.float)  # shape (n_key, n_period)
@@ -1245,7 +1289,8 @@ class graphmodel:
         data['key_aggregation_status'].x = torch.tensor(np.select(kl_conditions, kl_choices).reshape(-1, 1),
                                                         dtype=torch.int32)
 
-        print("generated key level indices with unique levels as: ", sorted_kl_list)
+        #print("generated key level indices with unique levels as: ", sorted_kl_list)
+        logger.info("generated key level indices with unique levels as: ", sorted_kl_list)
         ################## artefacts for efficiency end
 
         # create attribute 'key_level' for sampling batches across various key combinations
@@ -1282,7 +1327,8 @@ class graphmodel:
             onehot_cols_prefix = str(col) + '_'
             onehot_col_features = [f for f in df_global_var_snap.columns.tolist() if f.startswith(onehot_cols_prefix)]
             data[col].x = torch.tensor(df_global_var_snap[onehot_col_features].to_numpy(), dtype=torch.float)
-        print("node attributes created")
+        #print("node attributes created")
+        logger.info("node attributes created")
 
         # directed edges between global context node & target_col nodes
         """
@@ -1309,7 +1355,8 @@ class graphmodel:
 
             edge_name = (col, '{}_context'.format(col), self.target_col)
             data[edge_name].edge_index = torch.tensor(edges.transpose(), dtype=torch.long)
-        print("global context edges created")
+        #print("global context edges created")
+        logger.info("global context edges created")
 
         # bidirectional edges exist between target_col nodes related by various static cols
 
@@ -1388,7 +1435,8 @@ class graphmodel:
                 data[edge_name].edge_index = torch.tensor(edges.transpose(), dtype=torch.long)
                 data[rev_edge_name].edge_index = torch.tensor(rev_edges.transpose(), dtype=torch.long)
 
-        print("target node edges created")
+        #print("target node edges created")
+        logger.info("target node edges created")
         # directed edges are from co-variates to target
         for col in self.temporal_known_num_col_list + self.temporal_unknown_num_col_list + self.known_onehot_cols + self.unknown_onehot_cols:
             nodes = df_snap[df_snap['key_level'] == self.covar_key_level][self.id_col].to_numpy()
@@ -1397,9 +1445,11 @@ class graphmodel:
             edge_name = (col, '{}_effects'.format(col), self.target_col)
             data[edge_name].edge_index = torch.tensor(edges.transpose(), dtype=torch.long)
 
-        print("co-variate edges created")
+        #print("co-variate edges created")
+        logger.info("co-variate edges created")
         # validate dataset
-        print("validate snapshot graph ...")
+        #print("validate snapshot graph ...")
+        logger.info("validate snapshot graph ...")
         data.validate(raise_on_error=True)
 
         # get memory consumption
@@ -1415,41 +1465,51 @@ class graphmodel:
             self.known_onehot_cols)) + mask_tensor_size + weight_tensor_size + key_level_tensor_size + keybom_tensor_size + scaler_tensor_size)
         print("keybom tensor size: ", keybom_tensor_size)
         """
-        print("keybom shape: ", data['keybom'].x.shape)
+        #print("keybom shape: ", data['keybom'].x.shape)
+        logger.info("keybom shape: ", data['keybom'].x.shape)
 
         return data
 
     def onetime_dataprep(self, df):
         # preprocess
-        print("preprocessing dataframe...")
+        #print("preprocessing dataframe...")
+        logger.info("preprocessing dataframe...")
         df = self.preprocess(df)
         # pad dataframe
-        print("padding dataframe...")
+        #print("padding dataframe...")
+        logger.info("padding dataframe...")
         df = self.parallel_pad_dataframe(df)  # self.pad_dataframe(df)
-        print("reduce mem usage post padding ...")
+        #print("reduce mem usage post padding ...")
+        logger.info("reduce mem usage post padding ...")
         df = self.reduce_mem_usage(df)
-        print("creating relative time index & recency weights...")
+        #print("creating relative time index & recency weights...")
+        logger.info("creating relative time index & recency weights...")
         self.onetime_prep_df = self.get_relative_time_index(df)
         # add 'relative time index' to self.temporal_known_num_col_list
         self.temporal_known_num_col_list = self.temporal_known_num_col_list + ['relative_time_index']
 
     def create_train_test_dataset(self, df):
-        print("create rolling features...")
+        #print("create rolling features...")
+        logger.info("create rolling features...")
         df = self.derive_rolling_features(df)
         self.temporal_unknown_num_col_list = self.temporal_unknown_num_col_list + self.rolling_feature_cols
-        print("new preprocessed temporal_unknown_num_col_list: ", self.temporal_unknown_num_col_list)
+        #print("new preprocessed temporal_unknown_num_col_list: ", self.temporal_unknown_num_col_list)
+        logger.info("new preprocessed temporal_unknown_num_col_list: ", self.temporal_unknown_num_col_list)
 
         # split into train,test,infer
-        print("get cutoffs for training & testing periods ...")
+        #print("get cutoffs for training & testing periods ...")
+        logger.info("get cutoffs for training & testing periods ...")
         train_cutoff, test_start, test_cutoff = self.split_train_test(df)
 
-        print("split dataframe for training & testing ...")
+        #print("split dataframe for training & testing ...")
+        logger.info("split dataframe for training & testing ...")
         train_df = df[df[self.time_index_col] <= train_cutoff]
         test_df = df[(df[self.time_index_col] >= test_start) & (df[self.time_index_col] <= test_cutoff)]
         df_dict = {'train': train_df, 'test': test_df}
 
         # for each split create graph dataset iterator
-        print("create graph ...")
+        #print("create graph ...")
+        logger.info("create graph ...")
         datasets = {}
 
         for df_type, df in df_dict.items():
@@ -1463,7 +1523,8 @@ class graphmodel:
                         df_sample = df[
                             df[self.subgraph_sample_col].isin(all_subgraph_col_values[i:i + self.subgraph_sample_size])]
                         # sample snapshot graphs
-                        print("create subgraph for: ", all_subgraph_col_values[i:i + self.subgraph_sample_size])
+                        #print("create subgraph for: ", all_subgraph_col_values[i:i + self.subgraph_sample_size])
+                        logger.info("create subgraph for: ", all_subgraph_col_values[i:i + self.subgraph_sample_size])
                         graph = self.create_snapshot_graph(df_sample, df_sample[self.time_index_col].max())
                         snapshot_list.append(graph)
                 # Create a dataset iterator
@@ -1485,11 +1546,14 @@ class graphmodel:
         df.drop(columns=self.rolling_feature_cols, inplace=True)
         self.temporal_unknown_num_col_list = list(
             set(self.temporal_unknown_num_col_list) - set(self.rolling_feature_cols))
-        print("dropped derived features (to be recalculated) ...")
+        #print("dropped derived features (to be recalculated) ...")
+        logger.info("dropped derived features (to be recalculated) ...")
         self.rolling_feature_cols = []
-        print("re-init multistep collections & rolling features ...")
+        #print("re-init multistep collections & rolling features ...")
+        logger.info("re-init multistep collections & rolling features ...")
 
-        print("create rolling features...")
+        #print("create rolling features...")
+        logger.info("create rolling features...")
         df = self.derive_rolling_features(df)
         self.temporal_unknown_num_col_list = self.temporal_unknown_num_col_list + self.rolling_feature_cols
 
@@ -1502,7 +1566,8 @@ class graphmodel:
         stop_index = all_time_steps_list.index(infer_start_cutoff) + (self.fh + self.max_target_lags + self.lag_offset)
         infer_time_steps_list = all_time_steps_list[start_index:stop_index]
         infer_end_cutoff = infer_time_steps_list[-1]
-        print("infer start cutoff: {}, end_cutoff: {}".format(infer_start_cutoff, infer_end_cutoff))
+        #print("infer start cutoff: {}, end_cutoff: {}".format(infer_start_cutoff, infer_end_cutoff))
+        logger.info("infer start cutoff: {}, end_cutoff: {}".format(infer_start_cutoff, infer_end_cutoff))
 
         infer_df = df[(df[self.time_index_col] >= infer_start_cutoff) & (df[self.time_index_col] <= infer_end_cutoff)]
         # create graph
@@ -1519,7 +1584,8 @@ class graphmodel:
         sorted(data[data[self.time_index_col] <= self.train_till][self.time_index_col].unique(), reverse=False)[
             -(self.max_target_lags + self.lag_offset)]
         test_cutoff = data[data[self.time_index_col] <= self.test_till][self.time_index_col].max()
-        print("train & test cutoffs: ", train_cutoff, test_start, test_cutoff)
+        #print("train & test cutoffs: ", train_cutoff, test_start, test_cutoff)
+        logger.info("train & test cutoffs: ", train_cutoff, test_start, test_cutoff)
 
         return train_cutoff, test_start, test_cutoff
 
@@ -1584,7 +1650,8 @@ class graphmodel:
 
     def init_sub_batch_variables(self, ):
         # get init batch
-        print("initializing sub_batch_variables ...")
+        #print("initializing sub_batch_variables ...")
+        logger.info("initializing sub_batch_variables ...")
         batch = next(iter(self.train_dataset))
         # define batch size
         batch_size = self.batch_size
@@ -1608,7 +1675,8 @@ class graphmodel:
             self.key_level_num_samples[level] = np.ceil(
                 (index_sampler[index_sampler[:, 0] == level].size()[0] / len(all_indices)) * batch_size)
 
-        print("initialized sub_batch_variables ...")
+        #print("initialized sub_batch_variables ...")
+        logger.info("initialized sub_batch_variables ...")
 
     def get_sub_batch_sample(self, batch):
         """
@@ -1741,7 +1809,8 @@ class graphmodel:
         # get a sample batch
         sample_batch = next(iter(self.batch_generator(self.train_dataset, 'train', self.device)))
         self.metadata = sample_batch.metadata()
-        print("graph metadata: \n", self.metadata)
+        #print("graph metadata: \n", self.metadata)
+        logger.info("graph metadata: ", self.metadata)
 
         if batched_train:
             indices_list = self.pivot_leaf_node_indices[0]
@@ -1786,12 +1855,14 @@ class graphmodel:
         # parameters count
         try:
             pytorch_total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-            print("total model params: ", pytorch_total_params)
+            #print("total model params: ", pytorch_total_params)
+            logger.info("total model params: ", pytorch_total_params)
         except:
             pytorch_total_params = sum(
                 [0 if isinstance(p, torch.nn.parameter.UninitializedParameter) else p.numel() for p in
                  self.model.parameters()])
-            print("total model params: ", pytorch_total_params)
+            #print("total model params: ", pytorch_total_params)
+            logger.info("total model params: ", pytorch_total_params)
 
     def train(self,
               lr,
@@ -2208,8 +2279,10 @@ class graphmodel:
                 loss, metric = train_fn()
                 val_loss, val_metric = test_fn()
 
-            print('EPOCH {}: Train loss: {}, Val loss: {}'.format(epoch, loss, val_loss))
-            print('EPOCH {}: Train metric: {}, Val metric: {}'.format(epoch, metric, val_metric))
+            #print('EPOCH {}: Train loss: {}, Val loss: {}'.format(epoch, loss, val_loss))
+            #print('EPOCH {}: Train metric: {}, Val metric: {}'.format(epoch, metric, val_metric))
+            logger.info('EPOCH {}: Train loss: {}, Val loss: {}'.format(epoch, loss, val_loss))
+            logger.info('EPOCH {}: Train metric: {}, Val metric: {}'.format(epoch, metric, val_metric))
 
             if use_lr_scheduler:
                 scheduler.step(val_loss)
@@ -2248,7 +2321,8 @@ class graphmodel:
 
                 save_condition = ((val_metric_hist[epoch] == np.min(val_metric_hist)) and (-delta > min_delta)) or (epoch == 0)  # and (train_loss_hist[epoch] == np.min(train_loss_hist))
 
-            print("Improvement delta (min_delta {}):  {}".format(min_delta, delta))
+            #print("Improvement delta (min_delta {}):  {}".format(min_delta, delta))
+            logger.info("Improvement delta (min_delta {}):  {}".format(min_delta, delta))
 
             # track & save best model
             if save_condition:
@@ -2270,7 +2344,8 @@ class graphmodel:
                             pass
 
             if ((time_since_improvement > patience) and (epoch > min_epochs)) or (epoch == max_epochs - 1):
-                print("Terminating Training. Best Model: {}".format(self.best_model))
+                #print("Terminating Training. Best Model: {}".format(self.best_model))
+                logger.info("Terminating Training. Best Model: {}".format(self.best_model))
                 break
 
     def batched_train(self,

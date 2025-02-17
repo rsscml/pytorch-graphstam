@@ -6,6 +6,13 @@ from .graphbuilder.graphtft import graphmodel as GraphTFT
 from .graphbuilder.graphrecursive import graphmodel as SimpleGraph
 from .graphbuilder.graphseq2seq import graphmodel as GraphSeq2Seq
 from .configs.sample_config import print_sample_config
+from .configs.logger import Logger
+from datetime import datetime as dt
+
+def setup_logger(project_dir) :
+    logger = Logger(f"{project_dir}/logs/{dt.now():%Y-%m-%d}.log").get_logger()
+
+    return logger
 
 def show_config_template():
     print_sample_config()
@@ -14,12 +21,25 @@ class gml(object):
     def __init__(self, config):
         self.config = config
         self.model_type = self.config["model_type"]
+        self.project_dir = self.config["working_dir"]
         self.col_dict = self.config["features_config"]
         self.rolling_features = self.config.get("rolling_features", None)
         self.data_config = self.config["data_config"]
         self.model_config = self.config["model_config"]
         self.train_config = self.config["train_config"]
         self.infer_config = self.config["infer_config"]
+
+        # create working dir if it doesn't exist:
+        try:
+            if not os.path.exists(self.project_dir):
+                os.makedirs(self.project_dir)
+        except OSError as e:
+            print(f"Error creating working dir: {e}")
+            return
+
+        # setup logger
+        logger = setup_logger(self.project_dir)
+        logger.info("Starting execution configuration: %s", self.config)
 
         # backup original feature set
         self.baseline_col_dict = copy.deepcopy(self.col_dict)

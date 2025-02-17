@@ -143,10 +143,14 @@ infer_config = {
 # model_type
 # Select one of ['GraphTFT','SimpleGraph','GraphSeq2Seq']
 
+# working_dir
+# working_dir: Specify the directory for storing run artefacts 
+
 # Final Config
 
 config = {
             "model_type": 'GraphTFT',
+            "working_dir": "./",
             "features_config": features_config,
             "rolling_features": rolling_features,
             "data_config": data_config,
