@@ -34,8 +34,10 @@ class gml(object):
             if not os.path.exists(self.project_dir):
                 os.makedirs(self.project_dir)
             # also make models & logs dir under project_dir
-            os.makedirs(f"{self.project_dir}/models")
-            os.makedirs(f"{self.project_dir}/logs")
+            if not os.path.exists(f"{self.project_dir}/models"):
+                os.makedirs(f"{self.project_dir}/models")
+            if not os.path.exists(f"{self.project_dir}/logs"):
+                os.makedirs(f"{self.project_dir}/logs")
         except OSError as e:
             print(f"Error creating working dir: {e}")
             return
