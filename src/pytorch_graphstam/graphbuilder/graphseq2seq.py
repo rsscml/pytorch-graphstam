@@ -1427,7 +1427,7 @@ class graphmodel:
         logger.info("create rolling features...")
         df = self.derive_rolling_features(df)
         self.temporal_unknown_num_col_list = self.temporal_unknown_num_col_list + self.rolling_feature_cols
-        logger.info("new preprocessed temporal_unknown_num_col_list: {}".format(elf.temporal_unknown_num_col_list))
+        logger.info("new preprocessed temporal_unknown_num_col_list: {}".format(self.temporal_unknown_num_col_list))
 
         # split into train,test,infer
         logger.info("get cutoffs for training & testing periods ...")
