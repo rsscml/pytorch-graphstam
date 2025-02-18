@@ -65,6 +65,7 @@ class gml(object):
         interleave = self.data_config.get("interleave", 1)
         recency_weights = self.data_config.get("recency_weights", False)
         recency_alpha = self.data_config.get("recency_alpha", 1)
+        hierarchical_weights = self.data_config.get("hierarchical_weights", True)
         data_parallel_processes = int(os.cpu_count() / 1.5)
 
         # create graphmodel object
@@ -100,7 +101,7 @@ class gml(object):
                                    directed_graph = True,
                                    shuffle = True,
                                    interleave = interleave,
-                                   hierarchical_weights = True,
+                                   hierarchical_weights = hierarchical_weights,
                                    recency_weights = recency_weights,
                                    recency_alpha = recency_alpha,
                                    output_clipping = False,         # UNUSED
@@ -139,7 +140,7 @@ class gml(object):
                                       directed_graph = True,
                                       shuffle = True,
                                       interleave = interleave,
-                                      hierarchical_weights = True,
+                                      hierarchical_weights = hierarchical_weights,
                                       recency_weights = recency_weights,
                                       recency_alpha = recency_alpha,
                                       output_clipping = False,
@@ -178,7 +179,7 @@ class gml(object):
                                       directed_graph = True,
                                       shuffle = True,
                                       interleave = interleave,
-                                      hierarchical_weights = True,
+                                      hierarchical_weights = hierarchical_weights,
                                       recency_weights = recency_weights,
                                       recency_alpha = recency_alpha,
                                       output_clipping = False,
