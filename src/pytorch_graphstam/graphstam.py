@@ -10,7 +10,7 @@ from .configs.logger import Logger
 from datetime import datetime as dt
 
 def setup_logger(project_dir) :
-    logger = Logger(f"{project_dir}/logs/{dt.now():%Y-%m-%d}.log").get_logger()
+    logger = Logger(f"{project_dir}/logs/graphstam_{dt.now():%Y-%m-%d}.log").get_logger()
 
     return logger
 
