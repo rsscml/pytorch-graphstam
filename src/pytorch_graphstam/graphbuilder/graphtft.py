@@ -1430,7 +1430,7 @@ class graphmodel:
             self.known_onehot_cols)) + mask_tensor_size + weight_tensor_size + key_level_tensor_size + keybom_tensor_size + scaler_tensor_size)
         print("keybom tensor size: ", keybom_tensor_size)
         """
-        #print("keybom shape: ", data['keybom'].x.shape)
+
         logger.info("keybom shape: {}".format(data['keybom'].x.shape))
 
         return data
