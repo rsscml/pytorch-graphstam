@@ -1284,6 +1284,7 @@ class graphmodel:
 
         logger.info("node attributes created")
 
+        """
         # directed edges between global context node & target_col nodes
         for col in self.global_context_col_list:
             col_unique_values = sorted(df_snap[col].unique().tolist())
@@ -1297,6 +1298,15 @@ class graphmodel:
 
             # reverse edges
             edges = np.concatenate(edges_stack, axis=0)
+            edge_name = (col, '{}_context'.format(col), self.target_col)
+            data[edge_name].edge_index = torch.tensor(edges.transpose(), dtype=torch.long)
+        """
+
+        # directed edges between global context node & target_col nodes
+        for col in self.global_context_col_list:
+            nodes = df_snap[df_snap['key_level'] == self.covar_key_level][self.id_col].to_numpy()
+            edges = np.column_stack([nodes, nodes])
+
             edge_name = (col, '{}_context'.format(col), self.target_col)
             data[edge_name].edge_index = torch.tensor(edges.transpose(), dtype=torch.long)
 

@@ -1316,7 +1316,7 @@ class graphmodel:
         print("global context edges created")
         """
 
-        # directed edges are from co-variates to target
+        # directed edges between global context node & target_col nodes
         for col in self.global_context_col_list:
             nodes = df_snap[df_snap['key_level'] == self.covar_key_level][self.id_col].to_numpy()
             edges = np.column_stack([nodes, nodes])
