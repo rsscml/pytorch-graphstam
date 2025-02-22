@@ -57,6 +57,7 @@ class gml(object):
         max_covar_lags = self.data_config.get("max_covar_lags", max_lags)
         max_leads = self.data_config["fh"]
         fh = self.data_config["fh"]
+        autoregressive_target = self.data_config.get("autoregressive_target", True)
         train_till = self.data_config["train_till"]
         test_till = self.data_config["test_till"]
         scaling_method = self.data_config.get("scaling_method", "mean_scaling")
@@ -77,7 +78,7 @@ class gml(object):
                                    max_leads = max_leads,
                                    train_till = train_till,
                                    test_till = test_till,
-                                   autoregressive_target = True,
+                                   autoregressive_target = autoregressive_target,
                                    lag_offset = 0,
                                    rolling_features_list = self.rolling_features,
                                    min_history = 1,
@@ -116,7 +117,7 @@ class gml(object):
                                       max_leads = max_leads,
                                       train_till = train_till,
                                       test_till = test_till,
-                                      autoregressive_target = True,
+                                      autoregressive_target = autoregressive_target,
                                       lag_offset = 0,
                                       rolling_features_list = self.rolling_features,
                                       min_history = 1,
@@ -155,7 +156,7 @@ class gml(object):
                                       max_leads = max_leads,
                                       train_till = train_till,
                                       test_till = test_till,
-                                      autoregressive_target = True,
+                                      autoregressive_target = autoregressive_target,
                                       lag_offset = 0,
                                       rolling_features_list = self.rolling_features,
                                       min_history = 1,
