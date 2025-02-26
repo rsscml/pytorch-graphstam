@@ -73,6 +73,8 @@ data_config = {
 # num_rnn_layers: No. of rnn (LSTM) layers to use. If unsure, use a value of 1 (default).
 # heads: No. of attention heads to use in the self-attention block. This integer should be a factor of model_dim. default: 1.
 # forecast_quantiles: A list of various quantiles if learning a distribution
+# gbt: Use Gradient Boosting with GNN model as base learner
+# n_boosters: Number of sequential boosted models to train (equivalent to 'n_estimators' in xgboost); applies only if gbt == True.
 
 model_config = {
                 "model_dim": int (default = 64),
@@ -82,9 +84,9 @@ model_config = {
                 "heads": int (default = 1),
                 "forecast_quantiles": list (default = [0.5]),
                 "dropout": float (default = 0),
-                "chunk_size": (int, type(None)) (default = None),
-                "skip_connection": bool (default = False),
-                "device": str (default = 'cuda')
+                "device": str (default = 'cuda'),
+                "gbt": bool (default = False),
+                "n_boosters": int (default = 1)
     }
     
     

@@ -254,8 +254,6 @@ class graphmodel:
         self.metadata = None
         self.forecast_quantiles = None
         self.device = None
-        self.model = None
-        self.best_model = None
         self.loss = None
         self.multistep_target = []
         self.multistep_mask = []
@@ -264,6 +262,15 @@ class graphmodel:
         self.node_features_label = {}
         self.lead_lag_features_dict = {}
         self.all_lead_lag_cols = []
+
+        # boosting specific
+        self.base_model = None
+        self.best_base_model = None
+        self.gbt = False
+        self.n_boosters = None
+        self.gbt_lr = 1
+        self.boost_model_dict = {}
+        self.best_boost_model_dict = {}
 
         # subgraph sampling specific
         self.num_target_nodes = None
@@ -1741,6 +1748,8 @@ class graphmodel:
               dropout=0,
               chunk_size=None,
               device='cpu',
+              gbt=False,
+              n_boosters=1,
               batched_train=False):
 
         # key metadata for model def
@@ -1758,6 +1767,13 @@ class graphmodel:
         self.metadata = sample_batch.metadata()
         #print("graph metadata: \n", self.metadata)
         logger.info("graph metadata: {}".format(self.metadata))
+        self.gbt = gbt
+        if self.gbt:
+            assert n_boosters >= 1, "Specify n_boosters >= 1 for Gradient Boosting"
+            logger.info("gradient boosting enabled with {} boosters".format(n_boosters))
+            self.n_boosters = n_boosters
+            self.gbt_lr = (1/n_boosters)
+
 
         if batched_train:
             indices_list = self.pivot_leaf_node_indices[0]
@@ -1772,7 +1788,7 @@ class graphmodel:
             sample_batch = next(iter(loader))
 
         # build model
-        self.model = STGNN(hidden_channels=model_dim,
+        self.base_model = STGNN(hidden_channels=model_dim,
                            num_layers=num_layers,
                            num_attn_layers=num_attn_layers,
                            num_rnn_layers=num_rnn_layers,
@@ -1789,26 +1805,51 @@ class graphmodel:
                            tweedie_out=self.tweedie_out,
                            layer_type=layer_type,
                            chunk_size=chunk_size,
-                           device=device)
+                           device=device).to(self.device)
 
-        # init model
-        self.model = self.model.to(self.device)
+        if self.gbt:
+            if self.n_boosters >= 1:
+                # build boosting models
+                self.boost_model_dict = {}
+                for n in range(self.n_boosters):
+                    self.boost_model_dict[f"boost_model_{n}"] = STGNN(hidden_channels=model_dim,
+                                                                   num_layers=num_layers,
+                                                                   num_attn_layers=num_attn_layers,
+                                                                   num_rnn_layers=num_rnn_layers,
+                                                                   metadata=self.metadata,
+                                                                   target_node=self.target_col,
+                                                                   global_node_types=self.global_context_col_list,
+                                                                   feature_extraction_node_types=self.temporal_known_num_col_list,
+                                                                   encoder_only_node_types=self.temporal_unknown_num_col_list,
+                                                                   hist_len=self.max_target_lags,
+                                                                   fh=self.fh,
+                                                                   n_quantiles=len(self.forecast_quantiles),
+                                                                   heads=heads,
+                                                                   dropout=dropout,
+                                                                   tweedie_out=self.tweedie_out,
+                                                                   layer_type=layer_type,
+                                                                   chunk_size=chunk_size,
+                                                                   device=device).to(self.device)
 
         # Lazy init.
         with torch.no_grad():
             sample_batch = sample_batch.to(self.device)
-            _ = self.model(sample_batch.x_dict, sample_batch.edge_index_dict)
+            _ = self.base_model(sample_batch.x_dict, sample_batch.edge_index_dict)
+            if self.gbt:
+                for m_name, model in self.boost_model_dict.items():
+                    _ = model(sample_batch.x_dict, sample_batch.edge_index_dict)
 
         # parameters count
         try:
-            pytorch_total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            pytorch_total_params = sum(p.numel() for p in self.base_model.parameters() if p.requires_grad)
         except:
             pytorch_total_params = sum(
-                [0 if isinstance(p, torch.nn.parameter.UninitializedParameter) else p.numel() for p in
-                 self.model.parameters()])
+                [0 if isinstance(p, torch.nn.parameter.UninitializedParameter) else p.numel() for p in self.base_model.parameters()])
         logger.info("total model params: {}".format(pytorch_total_params))
 
-    def train(self,
+    def train_workflow(self,
+              model,
+              model_type, # 'base', 'boost'
               lr,
               min_epochs,
               max_epochs,
@@ -1821,7 +1862,8 @@ class graphmodel:
               use_lr_scheduler=True,
               scheduler_params=None,
               sample_weights=False,
-              stop_training_criteria='loss'):
+              stop_training_criteria='loss',
+              boost_model_num=0):
 
         if scheduler_params is None:
             scheduler_params = {'factor': 0.5,
@@ -1850,7 +1892,10 @@ class graphmodel:
         elif self.loss == 'Huber':
             loss_fn = Huber(delta=delta)
 
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        if model_type == 'base':
+            optimizer = torch.optim.Adam(self.base_model.parameters(), lr=lr)
+        else:
+            optimizer = torch.optim.Adam(self.boost_model_dict[f"boost_model_{boost_model_num}"].parameters(), lr=lr)
 
         if use_lr_scheduler:
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
@@ -1865,7 +1910,7 @@ class graphmodel:
                                                                    verbose=False)
         # init training data structures & vars
         model_list = []
-        self.best_model = None
+        best_model = None
         time_since_improvement = 0
         train_loss_hist = []
         val_loss_hist = []
@@ -1876,8 +1921,29 @@ class graphmodel:
         # torch.amp -- for mixed precision training
         scaler = torch.cuda.amp.GradScaler()
 
+        if model_type == 'boost':
+
+            def base_output(batch):
+                self.base_model.load_state_dict(torch.load(self.best_base_model))
+                self.base_model.eval()
+                with torch.no_grad():
+                    out = self.base_model(batch.x_dict, batch.edge_index_dict)
+                return out
+
+            def boost_output(batch, boost_model_num):
+                y_hat = base_output(batch)
+                for i in range(boost_model_num):
+                    if i>0:
+                        self.boost_model_dict[f"boost_model_{i}"].load_state_dict(torch.load(self.best_boost_model_dict[f"boost_model_{i}"]))
+                        self.boost_model_dict[f"boost_model_{i}"].eval()
+                        with torch.no_grad():
+                            yi_hat = self.boost_model_dict[f"boost_model_{i}"](batch.x_dict, batch.edge_index_dict)
+                        y_hat = y_hat + self.gbt_lr*yi_hat
+
+                return y_hat
+
         def train_fn():
-            self.model.train(True)
+            model.train(True)
             total_examples = 0
             total_loss = 0
             total_metric = 0
@@ -1891,7 +1957,14 @@ class graphmodel:
                     optimizer.zero_grad()
 
                 batch_size = batch.num_graphs
-                out = self.model(batch.x_dict, batch.edge_index_dict)
+                out = model(batch.x_dict, batch.edge_index_dict)
+
+                if model_type == 'base':
+                    y = batch[self.target_col].y
+                else:
+                    # output of boost model
+                    y_hat = boost_output(batch, boost_model_num)
+                    y = batch[self.target_col].y - torch.squeeze(y_hat, dim=2)
 
                 if self.loss == 'Tweedie' and self.estimate_tweedie_p:
                     tvp = batch[self.target_col].tvp
@@ -1901,11 +1974,11 @@ class graphmodel:
 
                 # compute loss masking out N/A targets -- last snapshot
                 if self.loss == 'Tweedie':
-                    loss = loss_fn.loss(y_pred=out, y_true=batch[self.target_col].y, p=tvp,
+                    loss = loss_fn.loss(y_pred=out, y_true=y, p=tvp,
                                         scaler=batch['scaler'].x,
                                         log1p_transform=self.log1p_transform)
                 else:
-                    loss = loss_fn.loss(out, batch[self.target_col].y)
+                    loss = loss_fn.loss(out, y)
 
                 mask = torch.unsqueeze(batch[self.target_col].y_mask, dim=2)
                 outlier_mask = torch.unsqueeze(batch[self.target_col].y_outlier_mask, dim=2)
@@ -1936,7 +2009,7 @@ class graphmodel:
                 else:
                     out = out * torch.unsqueeze(batch['scaler'].x, dim=2)
 
-                actual = torch.unsqueeze(batch[self.target_col].y, dim=2) * torch.unsqueeze(batch['scaler'].x, dim=2)
+                actual = torch.unsqueeze(y, dim=2) * torch.unsqueeze(batch['scaler'].x, dim=2)
 
                 if stop_training_criteria == 'mse':
                     mse_err = (mask * (out - actual) * (out - actual)).mean().data
@@ -1953,7 +2026,7 @@ class graphmodel:
                     weighted_loss.backward()
                     if clip_gradients:
                         # clip gradients
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_norm, norm_type=norm_type)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm, norm_type=norm_type)
                     # weights update
                     if ((i + 1) % self.accum_iter == 0) or (i + 1 == len(self.train_dataset)):
                         optimizer.step()
@@ -1962,7 +2035,7 @@ class graphmodel:
                     weighted_loss.backward()
                     if clip_gradients:
                         # clip gradients
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_norm, norm_type=norm_type)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm, norm_type=norm_type)
                     optimizer.step()
 
                 total_examples += batch_size
@@ -1972,7 +2045,7 @@ class graphmodel:
             return total_loss / total_examples, total_metric / total_examples
 
         def test_fn():
-            self.model.eval()
+            model.eval()
             total_examples = 0
             total_loss = 0
             total_metric = 0
@@ -1983,7 +2056,14 @@ class graphmodel:
                 for i, batch in enumerate(batch_gen):
                     batch = batch.to(self.device)
                     batch_size = batch.num_graphs
-                    out = self.model(batch.x_dict, batch.edge_index_dict)
+                    out = model(batch.x_dict, batch.edge_index_dict)
+
+                    if model_type == 'base':
+                        y = batch[self.target_col].y
+                    else:
+                        # output of boost model
+                        y_hat = boost_output(batch, boost_model_num)
+                        y = batch[self.target_col].y - torch.squeeze(y_hat, dim=2)
 
                     if self.loss == 'Tweedie' and self.estimate_tweedie_p:
                         tvp = batch[self.target_col].tvp
@@ -1993,11 +2073,11 @@ class graphmodel:
 
                     # compute loss masking out N/A targets -- last snapshot
                     if self.loss == 'Tweedie':
-                        loss = loss_fn.loss(y_pred=out, y_true=batch[self.target_col].y, p=tvp,
+                        loss = loss_fn.loss(y_pred=out, y_true=y, p=tvp,
                                             scaler=batch['scaler'].x,
                                             log1p_transform=self.log1p_transform)
                     else:
-                        loss = loss_fn.loss(out, batch[self.target_col].y)
+                        loss = loss_fn.loss(out, y)
 
                     mask = torch.unsqueeze(batch[self.target_col].y_mask, dim=2)
 
@@ -2025,8 +2105,7 @@ class graphmodel:
                     else:
                         out = out * torch.unsqueeze(batch['scaler'].x, dim=2)
 
-                    actual = torch.unsqueeze(batch[self.target_col].y, dim=2) * torch.unsqueeze(batch['scaler'].x,
-                                                                                                dim=2)
+                    actual = torch.unsqueeze(y, dim=2) * torch.unsqueeze(batch['scaler'].x, dim=2)
 
                     if stop_training_criteria == 'mse':
                         mse_err = (mask * (out - actual) * (out - actual)).mean().data
@@ -2044,7 +2123,7 @@ class graphmodel:
             return total_loss / total_examples, total_metric / total_examples
 
         def train_amp_fn():
-            self.model.train(True)
+            model.train(True)
             total_examples = 0
             total_loss = 0
             total_metric = 0
@@ -2064,14 +2143,21 @@ class graphmodel:
                     tvp = []
 
                 with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-                    out = self.model(batch.x_dict, batch.edge_index_dict)
+                    out = model(batch.x_dict, batch.edge_index_dict)
+
+                    if model_type == 'base':
+                        y = batch[self.target_col].y
+                    else:
+                        # output of boost model
+                        y_hat = boost_output(batch, boost_model_num)
+                        y = batch[self.target_col].y - torch.squeeze(y_hat, dim=2)
 
                     # compute loss masking out N/A targets -- last snapshot
                     if self.loss == 'Tweedie':
-                        loss = loss_fn.loss(y_pred=out, y_true=batch[self.target_col].y, p=tvp,
+                        loss = loss_fn.loss(y_pred=out, y_true=y, p=tvp,
                                             scaler=batch['scaler'].x, log1p_transform=self.log1p_transform)
                     else:
-                        loss = loss_fn.loss(out, batch[self.target_col].y)
+                        loss = loss_fn.loss(out, y)
 
                     mask = torch.unsqueeze(batch[self.target_col].y_mask, dim=2)
 
@@ -2101,8 +2187,7 @@ class graphmodel:
                     else:
                         out = out * torch.unsqueeze(batch['scaler'].x, dim=2)
 
-                    actual = torch.unsqueeze(batch[self.target_col].y, dim=2) * torch.unsqueeze(batch['scaler'].x,
-                                                                                                dim=2)
+                    actual = torch.unsqueeze(y, dim=2) * torch.unsqueeze(batch['scaler'].x, dim=2)
 
                     if stop_training_criteria == 'mse':
                         mse_err = (mask * (out - actual) * (out - actual)).mean().data
@@ -2121,7 +2206,7 @@ class graphmodel:
                         # unscale gradients
                         scaler.unscale_(optimizer)
                         # clip gradients
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_norm, norm_type=norm_type)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm, norm_type=norm_type)
                     # weights update
                     if ((i + 1) % self.accum_iter == 0) or (i + 1 == len(self.train_dataset)):
                         scaler.step(optimizer)
@@ -2133,7 +2218,7 @@ class graphmodel:
                         # unscale gradients
                         scaler.unscale_(optimizer)
                         # clip gradients
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_norm, norm_type=norm_type)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm, norm_type=norm_type)
                     scaler.step(optimizer)
                     scaler.update()
 
@@ -2144,7 +2229,7 @@ class graphmodel:
             return total_loss / total_examples, total_metric / total_examples
 
         def test_amp_fn():
-            self.model.eval()
+            model.eval()
             total_examples = 0
             total_loss = 0
             total_metric = 0
@@ -2161,15 +2246,22 @@ class graphmodel:
                         tvp = []
 
                     with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-                        out = self.model(batch.x_dict, batch.edge_index_dict)
+                        out = model(batch.x_dict, batch.edge_index_dict)
+
+                        if model_type == 'base':
+                            y = batch[self.target_col].y
+                        else:
+                            # output of boost model
+                            y_hat = boost_output(batch, boost_model_num)
+                            y = batch[self.target_col].y - torch.squeeze(y_hat, dim=2)
 
                         # compute loss masking out N/A targets -- last snapshot
                         if self.loss == 'Tweedie':
-                            loss = loss_fn.loss(y_pred=out, y_true=batch[self.target_col].y, p=tvp,
+                            loss = loss_fn.loss(y_pred=out, y_true=y, p=tvp,
                                                 scaler=batch['scaler'].x,
                                                 log1p_transform=self.log1p_transform)
                         else:
-                            loss = loss_fn.loss(out, batch[self.target_col].y)
+                            loss = loss_fn.loss(out, y)
 
                         mask = torch.unsqueeze(batch[self.target_col].y_mask, dim=2)
 
@@ -2196,8 +2288,7 @@ class graphmodel:
                         else:
                             out = out * torch.unsqueeze(batch['scaler'].x, dim=2)
 
-                        actual = torch.unsqueeze(batch[self.target_col].y, dim=2) * torch.unsqueeze(batch['scaler'].x,
-                                                                                                    dim=2)
+                        actual = torch.unsqueeze(y, dim=2) * torch.unsqueeze(batch['scaler'].x, dim=2)
 
                         if stop_training_criteria == 'mse':
                             mse_err = (mask * (out - actual) * (out - actual)).mean().data
@@ -2223,8 +2314,8 @@ class graphmodel:
                 loss, metric = train_fn()
                 val_loss, val_metric = test_fn()
 
-            logger.info('EPOCH {}: Train loss: {}, Val loss: {}'.format(epoch, loss, val_loss))
-            logger.info('EPOCH {}: Train metric: {}, Val metric: {}'.format(epoch, metric, val_metric))
+            logger.info('EPOCH {}: model type: {}, Train loss: {}, Val loss: {}'.format(epoch, model_type, loss, val_loss))
+            logger.info('EPOCH {}: model type: {}, Train metric: {}, Val metric: {}'.format(epoch, model_type, metric, val_metric))
 
             if use_lr_scheduler:
                 scheduler.step(val_loss)
@@ -2267,9 +2358,9 @@ class graphmodel:
 
             # track & save best model
             if save_condition:
-                self.best_model = model_path
+                best_model = model_path
                 # save model
-                torch.save(self.model.state_dict(), model_path)
+                torch.save(model.state_dict(), model_path)
                 # reset time_since_improvement
                 time_since_improvement = 0
             else:
@@ -2278,17 +2369,19 @@ class graphmodel:
             # remove older models
             if len(model_list) > patience:
                 for m in model_list[:-patience]:
-                    if m != self.best_model:
+                    if m != best_model:
                         try:
                             shutil.rmtree(m)
                         except:
                             pass
 
             if ((time_since_improvement > patience) and (epoch > min_epochs)) or (epoch == max_epochs - 1):
-                logger.info("Terminating Training. Best Model: {}".format(self.best_model))
+                logger.info("Terminating Training. Best Model: {}".format(best_model))
                 break
 
-    def batched_train(self,
+        return best_model
+
+    def batched_train_workflow(self,
                       lr,
                       min_epochs,
                       max_epochs,
@@ -2331,7 +2424,7 @@ class graphmodel:
         elif self.loss == 'Huber':
             loss_fn = Huber(delta=delta)
 
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        optimizer = torch.optim.Adam(self.base_model.parameters(), lr=lr)
 
         if use_lr_scheduler:
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
@@ -2375,7 +2468,7 @@ class graphmodel:
         gradient_accum_iter = len(pivot_leaf_node_indices_merged_lists)
 
         def train_fn():
-            self.model.train(True)
+            self.base_model.train(True)
             total_examples = 0
             total_loss = 0
             total_metric = 0
@@ -2402,7 +2495,7 @@ class graphmodel:
                         optimizer.zero_grad()
 
                     batch_size = batch.num_graphs
-                    out = self.model(batch.x_dict, batch.edge_index_dict)
+                    out = self.base_model(batch.x_dict, batch.edge_index_dict)
 
                     if self.loss == 'Tweedie' and self.estimate_tweedie_p:
                         tvp = batch[self.target_col].tvp
@@ -2447,7 +2540,7 @@ class graphmodel:
                         weighted_loss.backward()
                         if clip_gradients:
                             # clip gradients
-                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_norm,
+                            torch.nn.utils.clip_grad_norm_(self.base_model.parameters(), max_norm=max_norm,
                                                            norm_type=norm_type)
                         # weights update
                         if ((i + 1) % self.accum_iter == 0) or (i + 1 == gradient_accum_iter):
@@ -2457,7 +2550,7 @@ class graphmodel:
                         weighted_loss.backward()
                         if clip_gradients:
                             # clip gradients
-                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_norm,
+                            torch.nn.utils.clip_grad_norm_(self.base_model.parameters(), max_norm=max_norm,
                                                            norm_type=norm_type)
                         optimizer.step()
 
@@ -2486,7 +2579,7 @@ class graphmodel:
             return total_loss / total_examples, total_metric / total_examples
 
         def test_fn():
-            self.model.eval()
+            self.base_model.eval()
             total_examples = 0
             total_loss = 0
             total_metric = 0
@@ -2510,7 +2603,7 @@ class graphmodel:
                         batch = next(iter(loader))
                         batch = batch.to(self.device)
                         batch_size = batch.num_graphs
-                        out = self.model(batch.x_dict, batch.edge_index_dict)
+                        out = self.base_model(batch.x_dict, batch.edge_index_dict)
 
                         if self.loss == 'Tweedie' and self.estimate_tweedie_p:
                             tvp = batch[self.target_col].tvp
@@ -2572,7 +2665,7 @@ class graphmodel:
             return total_loss / total_examples, total_metric / total_examples
 
         def train_amp_fn():
-            self.model.train(True)
+            self.base_model.train(True)
             total_examples = 0
             total_loss = 0
             total_metric = 0
@@ -2592,7 +2685,7 @@ class graphmodel:
                     tvp = []
 
                 with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-                    out = self.model(batch.x_dict, batch.edge_index_dict)
+                    out = self.base_model(batch.x_dict, batch.edge_index_dict)
 
                     # compute loss masking out N/A targets -- last snapshot
                     if self.loss == 'Tweedie':
@@ -2649,7 +2742,7 @@ class graphmodel:
                         # unscale gradients
                         scaler.unscale_(optimizer)
                         # clip gradients
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_norm, norm_type=norm_type)
+                        torch.nn.utils.clip_grad_norm_(self.base_model.parameters(), max_norm=max_norm, norm_type=norm_type)
                     # weights update
                     if ((i + 1) % self.accum_iter == 0) or (i + 1 == len(self.train_dataset)):
                         scaler.step(optimizer)
@@ -2661,7 +2754,7 @@ class graphmodel:
                         # unscale gradients
                         scaler.unscale_(optimizer)
                         # clip gradients
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_norm, norm_type=norm_type)
+                        torch.nn.utils.clip_grad_norm_(self.base_model.parameters(), max_norm=max_norm, norm_type=norm_type)
                     scaler.step(optimizer)
                     scaler.update()
 
@@ -2672,7 +2765,7 @@ class graphmodel:
             return total_loss / total_examples, total_metric / total_examples
 
         def test_amp_fn():
-            self.model.eval()
+            self.base_model.eval()
             total_examples = 0
             total_loss = 0
             total_metric = 0
@@ -2689,7 +2782,7 @@ class graphmodel:
                         tvp = []
 
                     with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-                        out = self.model(batch.x_dict, batch.edge_index_dict)
+                        out = self.base_model(batch.x_dict, batch.edge_index_dict)
 
                         # compute loss masking out N/A targets -- last snapshot
                         if self.loss == 'Tweedie':
@@ -2795,9 +2888,9 @@ class graphmodel:
 
             # track & save best model
             if save_condition:
-                self.best_model = model_path
+                self.best_base_model = model_path
                 # save model
-                torch.save(self.model.state_dict(), model_path)
+                torch.save(self.base_model.state_dict(), model_path)
                 # reset time_since_improvement
                 time_since_improvement = 0
             else:
@@ -2806,28 +2899,83 @@ class graphmodel:
             # remove older models
             if len(model_list) > patience:
                 for m in model_list[:-patience]:
-                    if m != self.best_model:
+                    if m != self.best_base_model:
                         try:
                             shutil.rmtree(m)
                         except:
                             pass
 
             if ((time_since_improvement > patience) and (epoch > min_epochs)) or (epoch == max_epochs - 1):
-                logger.info("Terminating Training. Best Model: {}".format(self.best_model))
+                logger.info("Terminating Training. Best Model: {}".format(self.best_base_model))
                 break
 
     def change_device(self, device='cpu'):
         self.device = torch.device(device)
-        self.model.load_state_dict(torch.load(self.best_model, map_location=self.device))
+        self.base_model.load_state_dict(torch.load(self.best_base_model, map_location=self.device))
 
     def disable_cuda_backend(self, ):
         self.change_device(device="cuda")
         torch.backends.cudnn.enabled = False
 
-    def infer(self, infer_start, infer_end, select_quantile, best_model=None):
 
-        if best_model is None:
-            best_model = self.best_model
+    def train(self,
+                  lr,
+                  min_epochs,
+                  max_epochs,
+                  patience,
+                  min_delta,
+                  model_prefix,
+                  loss_type='Quantile',  # 'Tweedie','Quantile,'RMSE','Huber'
+                  delta=1.0,  # for Huber
+                  use_amp=False,
+                  use_lr_scheduler=True,
+                  scheduler_params=None,
+                  sample_weights=False,
+                  stop_training_criteria='loss',
+                  boost_model_num=0):
+
+        # train base model
+        self.best_base_model = self.train_workflow(model=self.base_model,
+                                          model_type='base',
+                                          lr=lr,
+                                          min_epochs=min_epochs,
+                                          max_epochs=max_epochs,
+                                          patience=patience,
+                                          min_delta=min_delta,
+                                          model_prefix=model_prefix + '_base',
+                                          loss_type=loss_type,  # 'Tweedie','Quantile,'RMSE','Huber'
+                                          delta=delta,  # for Huber
+                                          use_amp=use_amp,
+                                          use_lr_scheduler=use_lr_scheduler,
+                                          scheduler_params=scheduler_params,
+                                          sample_weights=sample_weights,
+                                          stop_training_criteria=stop_training_criteria,
+                                          boost_model_num=boost_model_num)
+
+        if self.gbt:
+            # train boosting model
+            for n, (m_name, model) in enumerate(self.boost_model_dict.items()):
+                best_model_path = self.train_workflow(model = model,
+                                             model_type = 'boost',
+                                             lr=lr,
+                                             min_epochs=min_epochs,
+                                             max_epochs=max_epochs,
+                                             patience=patience,
+                                             min_delta=min_delta,
+                                             model_prefix=model_prefix + m_name,
+                                             loss_type=loss_type,
+                                             delta=delta,
+                                             use_amp=use_amp,
+                                             use_lr_scheduler=use_lr_scheduler,
+                                             scheduler_params=scheduler_params,
+                                             sample_weights=sample_weights,
+                                             stop_training_criteria=stop_training_criteria,
+                                             boost_model_num=n)
+
+                self.best_boost_model_dict[m_name] = best_model_path
+
+
+    def infer(self, infer_start, infer_end, select_quantile):
 
         base_df = self.onetime_prep_df
 
@@ -2837,7 +2985,10 @@ class graphmodel:
                 self.time_index_col].unique().tolist())
 
         # print model used for inference
-        logger.info("running inference using best saved model: {}".format(self.best_model))
+        if not self.gbt:
+            logger.info("running inference using best saved base model: {}".format(self.best_base_model))
+        else:
+            logger.info("running inference using best saved base model: {} & boost models: {}".format(self.best_base_model, self.best_boost_model_dict))
 
         # infer fn
         def infer_fn(model, model_path, infer_data):
@@ -2862,11 +3013,18 @@ class graphmodel:
 
             # infer dataset creation
             infer_df, infer_dataset = self.create_infer_dataset(base_df, infer_start=t)
-            output = infer_fn(self.model, best_model, infer_dataset)
-
-            # select output quantile
+            output = infer_fn(self.base_model, self.best_base_model, infer_dataset)
+            # select output
             output_arr = output[0]
             output_arr = output_arr.cpu().numpy()
+
+            if self.gbt:
+                # then boost models
+                for n, (m_name, model) in enumerate(self.boost_model_dict.items()):
+                    residue = infer_fn(model, self.best_boost_model_dict[m_name], infer_dataset)
+                    residue_arr = residue[0]
+                    residue_arr = residue_arr.cpu().numpy()
+                    output_arr = output_arr + self.gbt_lr * residue_arr
 
             # quantile selection
             min_qtile, max_qtile = min(self.forecast_quantiles), max(self.forecast_quantiles)
@@ -2919,10 +3077,7 @@ class graphmodel:
 
         return forecast_df
 
-    def infer_sim(self, infer_start, infer_end, select_quantile, sim_df, best_model=None):
-
-        if best_model is None:
-            best_model = self.best_model
+    def infer_sim(self, infer_start, infer_end, select_quantile, sim_df):
 
         # get list of infer periods
         infer_periods = sorted(
@@ -2930,7 +3085,11 @@ class graphmodel:
                 self.time_index_col].unique().tolist())
 
         # print model used for inference
-        logger.info("running simulated inference using best saved model: {}".format(self.best_model))
+        if not self.gbt:
+            logger.info("running inference using best saved base model: {}".format(self.best_base_model))
+        else:
+            logger.info(
+                "running inference using best saved base model: {} & boost models: {}".format(self.best_base_model, self.best_boost_model_dict))
 
         # infer fn
         def infer_fn(model, model_path, infer_data):
@@ -2953,11 +3112,18 @@ class graphmodel:
 
             # infer dataset creation
             infer_df, infer_dataset = self.create_infer_dataset(sim_df, infer_start=t)
-            output = infer_fn(self.model, best_model, infer_dataset)
-
-            # select output quantile
+            output = infer_fn(self.base_model, self.best_base_model, infer_dataset)
+            # select output
             output_arr = output[0]
             output_arr = output_arr.cpu().numpy()
+
+            if self.gbt:
+                # then boost models
+                for n, (m_name, model) in enumerate(self.boost_model_dict.items()):
+                    residue = infer_fn(model, self.best_boost_model_dict[m_name], infer_dataset)
+                    residue_arr = residue[0]
+                    residue_arr = residue_arr.cpu().numpy()
+                    output_arr = output_arr + self.gbt_lr * residue_arr
 
             # quantile selection
             min_qtile, max_qtile = min(self.forecast_quantiles), max(self.forecast_quantiles)

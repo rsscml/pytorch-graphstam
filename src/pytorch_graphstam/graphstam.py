@@ -211,6 +211,8 @@ class gml(object):
         skip_connection = self.model_config.get("skip_connection", False)
         feature_transform = self.model_config.get("feature_transform", True)
         device = self.model_config.get("device", 'cuda')
+        gbt = self.model_config.get("gbt", False)
+        n_boosters = self.model_config.get("n_boosters", 0)
         batched_train = self.model_config.get("batched_train", False)
 
         if self.model_type == 'GraphTFT':
@@ -224,6 +226,8 @@ class gml(object):
                               dropout=dropout,
                               chunk_size=chunk_size,
                               device=device,
+                              gbt=gbt,
+                              n_boosters=n_boosters,
                               batched_train=batched_train)
 
         elif self.model_type == 'SimpleGraph':
@@ -237,7 +241,9 @@ class gml(object):
                               chunk_size=chunk_size,
                               skip_connection=skip_connection,
                               feature_transform=feature_transform,
-                              device=device)
+                              device=device,
+                              gbt=gbt,
+                              n_boosters=n_boosters)
 
         elif self.model_type == 'GraphSeq2Seq':
             self.gmlobj.build(layer_type='SAGE',
@@ -250,7 +256,9 @@ class gml(object):
                               chunk_size=chunk_size,
                               skip_connection=skip_connection,
                               feature_transform=feature_transform,
-                              device=device)
+                              device=device,
+                              gbt=gbt,
+                              n_boosters=n_boosters)
 
 
     def train(self):
