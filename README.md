@@ -2,6 +2,13 @@
 
 **pytorch-graphstam** is a Python library built on [PyTorch](https://pytorch.org/) and [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/en/latest/) to simplify working with graph neural networks based forecasting models.
 
+Following architecture implementations are provided:
+- GraphTFT: Temporal Fusion Transformer (TFT) architecture with GNNs augmenting the encoder. This gives a significant boost to vanilla TFT capability.
+- SimpleGraph: A lightweight GNN model implementation that uses recursion for multistep outputs.
+- GraphSeq2Seq: Similar to SimpleGraph but with a non-recursive multistep output implementation.
+
+Note: All the models above also support gradient boosting (see config & example notebooks for details) to improve accuracies even further at the cost of extra training time.
+
 ---
 
 ## Table of Contents
