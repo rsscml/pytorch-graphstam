@@ -1437,7 +1437,9 @@ class graphmodel:
             logger.info("padding dataframe...")
             df = self.parallel_pad_dataframe(df)  # self.pad_dataframe(df)
         else:
-            logger.info("not applying gap padding")
+            logger.info("not applying gap padding! Ensure 'y_mask' & 'y_outlier_mask' columns are present in the dataframe")
+            logger.info(f"columns: {df.columns.tolist()}")
+
         logger.info("reduce mem usage post padding ...")
         df = self.reduce_mem_usage(df)
         logger.info("creating relative time index & recency weights...")
