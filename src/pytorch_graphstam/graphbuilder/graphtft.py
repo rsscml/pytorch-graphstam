@@ -159,6 +159,10 @@ class graphmodel:
 
         # use padding
         self.pad_data = pad_data
+        if self.pad_data:
+            mask_cols = []
+        else:
+            mask_cols = ['y_mask','y_outlier_mask']
 
         # adjust train_till/test_till for delta|max_leads - fh| in split_* methods
         self.train_till = train_till
@@ -288,7 +292,7 @@ class graphmodel:
                          self.temporal_known_cat_col_list + self.temporal_unknown_cat_col_list + \
                          self.global_context_col_list
         self.temporal_col_list = self.temporal_known_cat_col_list + self.temporal_unknown_cat_col_list + \
-                                 self.temporal_known_num_col_list + self.temporal_unknown_num_col_list
+                                 self.temporal_known_num_col_list + self.temporal_unknown_num_col_list + mask_cols
 
         self.global_context_onehot_cols = []
         self.known_onehot_cols = []
@@ -1455,8 +1459,17 @@ class graphmodel:
             logger.info("padding dataframe...")
             df = self.parallel_pad_dataframe(df)  # self.pad_dataframe(df)
         else:
-            logger.info("not applying gap padding")
-        logger.info("reduce mem usage post padding ...")
+            logger.info(
+                "not applying gap padding! Ensure 'y_mask' & 'y_outlier_mask' columns are present in the dataframe")
+            # add y_mask & y_outlier_mask defaults if not specified
+            if 'y_mask' not in df.columns.tolist():
+                df['y_mask'] = 1
+
+            if 'y_outlier_mask' not in df.columns.tolist():
+                df['y_outlier_mask'] = 1
+
+            logger.info(f"columns: {df.columns.tolist()}")
+        logger.info("reduce mem usage ...")
         df = self.reduce_mem_usage(df)
         logger.info("creating relative time index & recency weights...")
         self.onetime_prep_df = self.get_relative_time_index(df)
