@@ -102,6 +102,7 @@ class graphmodel:
                  rolling_features_list=None,
                  min_history=1,
                  fh=1,
+                 pad_data=True,
                  recursive=False,
                  batch_size=1000,
                  subgraph_sampling=False,
@@ -155,6 +156,9 @@ class graphmodel:
         self.max_target_lags = int(self.max_target_lags + lag_offset)
 
         assert self.max_leads >= self.fh, "max_leads must be >= fh"
+
+        # use padding
+        self.pad_data = pad_data
 
         # adjust train_till/test_till for delta|max_leads - fh| in split_* methods
         self.train_till = train_till
@@ -1020,7 +1024,7 @@ class graphmodel:
         null_status, null_cols = self.check_null(data)
         if null_status:
             logger.error("NaN column(s): {}".format(null_cols))
-            raise ValueError("Column(s) with NaN detected!")
+            raise ValueError(f"Column(s) with NaN detected! {null_cols}")
         # check data sufficiency
         df = self.check_data_sufficiency(data)
         # create new keys
@@ -1431,8 +1435,11 @@ class graphmodel:
         logger.info("preprocessing dataframe...")
         df = self.preprocess(df)
         # pad dataframe
-        logger.info("padding dataframe...")
-        df = self.parallel_pad_dataframe(df)  # self.pad_dataframe(df)
+        if self.pad_data:
+            logger.info("padding dataframe...")
+            df = self.parallel_pad_dataframe(df)  # self.pad_dataframe(df)
+        else:
+            logger.info("not applying gap padding")
         logger.info("reduce mem usage post padding ...")
         df = self.reduce_mem_usage(df)
         logger.info("creating relative time index & recency weights...")

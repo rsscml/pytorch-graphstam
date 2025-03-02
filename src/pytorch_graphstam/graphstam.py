@@ -57,6 +57,7 @@ class gml(object):
         max_covar_lags = self.data_config.get("max_covar_lags", max_lags)
         max_leads = self.data_config["fh"]
         fh = self.data_config["fh"]
+        pad_data = self.data_config.get("pad_data", True)
         autoregressive_target = self.data_config.get("autoregressive_target", True)
         train_till = self.data_config["train_till"]
         test_till = self.data_config["test_till"]
@@ -83,6 +84,7 @@ class gml(object):
                                    rolling_features_list = self.rolling_features,
                                    min_history = 1,
                                    fh = fh,
+                                   pad_data = pad_data,
                                    recursive = False,
                                    batch_size = 1000,               # UNUSED
                                    subgraph_sampling = False,       # UNUSED
@@ -122,6 +124,7 @@ class gml(object):
                                       rolling_features_list = self.rolling_features,
                                       min_history = 1,
                                       fh = 1,
+                                      pad_data=pad_data,
                                       recursive = True,
                                       batch_size = 1000,
                                       subgraph_sampling = False,
@@ -161,6 +164,7 @@ class gml(object):
                                       rolling_features_list = self.rolling_features,
                                       min_history = 1,
                                       fh = fh,
+                                      pad_data=pad_data,
                                       recursive = False,
                                       batch_size = 1000,
                                       subgraph_sampling = False,
