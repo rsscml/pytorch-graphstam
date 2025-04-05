@@ -126,6 +126,7 @@ class graphmodel:
                  recency_weights=False,
                  recency_alpha=0,
                  output_clipping=False,
+                 pin_graph_in_memory=True,
                  PARALLEL_DATA_JOBS=4,
                  PARALLEL_DATA_JOBS_BATCHSIZE=128):
         super().__init__()
@@ -193,6 +194,7 @@ class graphmodel:
         self.recency_weights = recency_weights
         self.recency_alpha = recency_alpha
         self.output_clipping = output_clipping
+        self.pin_graph_in_memory = pin_graph_in_memory
         self.PARALLEL_DATA_JOBS = PARALLEL_DATA_JOBS
         self.PARALLEL_DATA_JOBS_BATCHSIZE = PARALLEL_DATA_JOBS_BATCHSIZE
         self.pad_constant = 0
@@ -474,7 +476,7 @@ class graphmodel:
         if self.wt_col is None:
             df['Key_Weight'] = 1
         else:
-            print("check key weights ...")
+            logger.info("check key weights ...")
             for key_level in df['key_level'].unique().tolist():
                 null_status = df[df['key_level'] == key_level][self.wt_col].isnull().any()
                 min_wt = df[df['key_level'] == key_level][self.wt_col].min()
@@ -1693,7 +1695,8 @@ class graphmodel:
 
     def batch_generator(self, graph_dataset, mode, device):
         graph = next(iter(graph_dataset))
-        # graph = graph.to(device)
+        if self.pin_graph_in_memory:
+            graph = graph.to(device)
         # get start & end of indices for iterating
         max_seq_len = graph.x_dict[self.target_col].shape[1]
         context_len = int(self.max_target_lags + self.lag_offset)
@@ -1939,7 +1942,8 @@ class graphmodel:
             batch_gen = self.batch_generator(self.train_dataset, 'train', self.device)
 
             for i, batch in enumerate(batch_gen):
-                batch = batch.to(self.device)
+                if not self.pin_graph_in_memory:
+                    batch = batch.to(self.device)
                 if not self.grad_accum:
                     optimizer.zero_grad()
 
@@ -2040,7 +2044,8 @@ class graphmodel:
 
             with torch.no_grad():
                 for i, batch in enumerate(batch_gen):
-                    batch = batch.to(self.device)
+                    if not self.pin_graph_in_memory:
+                        batch = batch.to(self.device)
                     batch_size = batch.num_graphs
                     out = model(batch.x_dict, batch.edge_index_dict)
 
@@ -2116,7 +2121,8 @@ class graphmodel:
             batch_gen = self.batch_generator(self.train_dataset, 'train', self.device)
 
             for i, batch in enumerate(batch_gen):
-                batch = batch.to(self.device)
+                if not self.pin_graph_in_memory:
+                    batch = batch.to(self.device)
                 if not self.grad_accum:
                     optimizer.zero_grad()
                 batch_size = batch.num_graphs
@@ -2221,7 +2227,8 @@ class graphmodel:
             batch_gen = self.batch_generator(self.test_dataset, 'test', self.device)
             with torch.no_grad():
                 for i, batch in enumerate(batch_gen):
-                    batch = batch.to(self.device)
+                    if not self.pin_graph_in_memory:
+                        batch = batch.to(self.device)
                     batch_size = batch.num_graphs
                     if self.loss == 'Tweedie' and self.estimate_tweedie_p:
                         tvp = batch[self.target_col].tvp

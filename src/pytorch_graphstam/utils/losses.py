@@ -123,3 +123,32 @@ class Huber:
         loss = self.loss_obj(input=y_pred, target=y_true)
         return loss
 
+
+class NormalizedMultiLoss:
+    def __init__(self, alpha=0.5, beta=0.9, ema_iterations=10):
+        self.alpha = alpha  # Weight for point loss
+        self.beta = beta  # EMA decay factor
+        self.max_ema_iterations = ema_iterations
+        self.init_iterations = 0
+        self.point_loss_ema = None
+        self.total_loss_ema = None
+
+    def loss(self, point_loss, total_loss):
+
+        if self.init_iterations <= self.max_ema_iterations:
+            self.init_iterations += 1
+            # Update exponential moving averages
+            if self.point_loss_ema is None:
+                self.point_loss_ema = point_loss.detach().mean().item()
+                self.total_loss_ema = total_loss.detach().mean().item()
+            else:
+                self.point_loss_ema = self.beta * self.point_loss_ema + (1 - self.beta) * point_loss.detach().mean().item()
+                self.total_loss_ema = self.beta * self.total_loss_ema + (1 - self.beta) * total_loss.detach().mean().item()
+
+
+        # Normalize losses by their EMAs
+        normalized_point_loss = point_loss / (self.point_loss_ema + 1e-8)
+        normalized_total_loss = total_loss / (self.total_loss_ema + 1e-8)
+
+        # Weighted combination of normalized losses
+        return self.alpha * normalized_point_loss + (1 - self.alpha) * normalized_total_loss

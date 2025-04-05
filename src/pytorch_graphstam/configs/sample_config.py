@@ -49,7 +49,7 @@ rolling_features = list of tuples
 # hierarchical_weights: If True, apply hierarchical weights to training loss. Set it to True for hierarchical forecasting scenarios.
 # recency_weights: If True, apply more weight to more recent training samples.
 # recency_alpha: If recency_weights == True, set to an integer value >= 1. Greater values imply greater weights for recent samples.
-# 
+# pin_graph_in_memory: If pin_graph_in_memory == True, graph dataset is permanently loaded in GPU VRAM to speed up workflow (upto 2x) at the expense of additional VRAM consumption
 
 data_config = {
                 "max_lags": int,
@@ -62,7 +62,8 @@ data_config = {
                 "tweedie_variance_power": list,   # list of floats (e.g., [1.1])
                 "interleave": int,
                 "recency_weights": bool,
-                "recency_alpha": float
+                "recency_alpha": float,
+                "pin_graph_in_memory": bool
 }
 
 # model config -- defines hyperparameters for model construction
@@ -75,6 +76,7 @@ data_config = {
 # forecast_quantiles: A list of various quantiles if learning a distribution
 # gbt: Use Gradient Boosting with GNN model as base learner
 # n_boosters: Number of sequential boosted models to train (equivalent to 'n_estimators' in xgboost); applies only if gbt == True.
+# downsample_factor: Integer. Applies only to GraphTFT model. If > 1, scales down feature dim for efficient message propagation in graph. Reduces VRAM requirement. 
 
 model_config = {
                 "model_dim": int (default = 64),
@@ -86,7 +88,8 @@ model_config = {
                 "dropout": float (default = 0),
                 "device": str (default = 'cuda'),
                 "gbt": bool (default = False),
-                "n_boosters": int (default = 1)
+                "n_boosters": int (default = 1),
+                "downsample_factor": int (default = 1)
     }
     
     
@@ -97,6 +100,9 @@ model_config = {
 # patience: Number of epochs to continue training for when loss is not decreasing. After these many epochs, if epochs > min_epochs, the training stops.
 # model_prefix: Used to derive the filepath for saving the model.
 # loss_type: The metric to minimize.
+# use_normalized_multi_loss: If True, utilizes Normalized Multi Loss for optimization which takes into account both per timestep loss & aggregate loss across forecast horizon.  Can improve accuracy with slight compute overhead.
+# beta: Applicable only if use_normalized_multi_loss == True. Defines weight for exponential moving average of loss magnitude over 'ema_iterations' no. of iterations.
+# ema_iterations: Applicable only if use_normalized_multi_loss == True. Normalization constants for both timestep loss & aggregate loss are identified over these many training iterations. Keep < 1 epoch worth of iterations.
 # huber_delta: Applicable only if loss_type is 'Huber'. The hyperparameter for Huber loss fn.
 # use_amp: If True, will cast all float32 values to float16 to save cpu memory/gpu VRAM while achieving speedup at the expense of accuracy; the impact on accuracy in most cases should be negligible but always compare!
 # use_lr_scheduler: If True, uses a linear scheduler for learning rate. If the loss doesn't decrease over epochs, learning rate is reduced as per the parameters defined in scheduler_params_config
@@ -110,6 +116,9 @@ train_config = {
                 "patience": int (default = 5),
                 "model_prefix": str (default = f"./{model_type}"),
                 "loss_type": str (default = 'Quantile', Options = ['Quantile', 'Huber', 'Tweedie', 'RMSE']),
+                "use_normalized_multi_loss": bool (default = False),
+                "beta": Float between (0,1) (default = 0.9),
+                "ema_iterations": Int (>1) (default = 10),
                 "huber_delta": float (default = 0.5),
                 "use_amp": bool (default = False),
                 "use_lr_scheduler": bool (default = True),

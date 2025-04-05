@@ -22,6 +22,7 @@ class STGNN(torch.nn.Module):
                  dropout=0.0,
                  tweedie_out=False,
                  layer_type='SAGE',
+                 downsample_factor=1,
                  chunk_size=None,
                  device='cuda'):
 
@@ -86,6 +87,7 @@ class STGNN(torch.nn.Module):
             self.gnn_model = HeteroGraphSAGE(fh=fh,
                                              in_channels=(-1,-1),
                                              hidden_channels=hidden_channels,
+                                             downsample_factor=downsample_factor,
                                              num_layers=num_layers,
                                              dropout=dropout,
                                              node_types=self.node_types,

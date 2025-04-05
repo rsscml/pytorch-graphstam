@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import torch_geometric
 from torch_geometric.nn import Linear, HeteroConv, LayerNorm, aggr
 from ..utils.sageconv_3d import SAGEConv3D
-
+from ..utils.tft_components import apply_time_distributed
 
 class DirSageConv(torch.nn.Module):
     def __init__(self, input_dim, output_dim, alpha, aggr):
@@ -99,6 +99,7 @@ class HeteroGraphSAGE(torch.nn.Module):
                  fh,
                  in_channels,
                  hidden_channels,
+                 downsample_factor,
                  num_layers,
                  dropout,
                  node_types,
@@ -116,29 +117,43 @@ class HeteroGraphSAGE(torch.nn.Module):
         self.global_node_types = global_node_types
         self.num_layers = num_layers
         self.fh = fh
+        self.downsample_dim = int(hidden_channels / downsample_factor)
+        self.downsample_factor = downsample_factor
 
         self.transformed_feat_dict = torch.nn.ModuleDict()
         for node_type in node_types:
             if node_type == target_node_type or (node_type in self.feature_extraction_node_types):
-                self.transformed_feat_dict[node_type] = torch.nn.Sequential(Linear(-1, hidden_channels),
+                self.transformed_feat_dict[node_type] = torch.nn.Sequential(Linear(-1, self.downsample_dim),
                                                                             torch.nn.ReLU(),
-                                                                            Linear(hidden_channels, hidden_channels),
+                                                                            Linear(self.downsample_dim, self.downsample_dim),
                                                                             torch.nn.ReLU(),
-                                                                            Linear(hidden_channels, hidden_channels),
+                                                                            Linear(self.downsample_dim, self.downsample_dim),
                                                                             torch.nn.ReLU()
                                                                             )
             else:
-                self.transformed_feat_dict[node_type] = torch.nn.Sequential(Linear(-1, hidden_channels),
+                self.transformed_feat_dict[node_type] = torch.nn.Sequential(Linear(-1, self.downsample_dim),
                                                                             torch.nn.ReLU(),
-                                                                            Linear(hidden_channels, hidden_channels),
+                                                                            Linear(self.downsample_dim, self.downsample_dim),
                                                                             torch.nn.ReLU()
                                                                             )
+
+        if self.downsample_factor > 1:
+            # re-dim the decoder & global nodes for TFT
+            self.upsample_feat_dict = torch.nn.ModuleDict()
+            for node_type in node_types:
+                if (node_type in self.decoder_node_types) or (node_type in self.global_node_types):
+                    self.upsample_feat_dict[node_type] = torch.nn.Sequential(Linear(-1, hidden_channels),
+                                                                                torch.nn.ReLU(),
+                                                                                Linear(hidden_channels, hidden_channels),
+                                                                                torch.nn.ReLU())
+            # re-dim target node
+            self.upsample_layer = Linear(-1, hidden_channels)
 
         # Conv Layers
         self.conv_layers = torch.nn.ModuleList()
         for i in range(num_layers):
-            conv = HeteroForecastSageConv(in_channels=in_channels if i == 0 else hidden_channels,
-                                          out_channels=hidden_channels,
+            conv = HeteroForecastSageConv(in_channels=in_channels if i == 0 else self.downsample_dim,
+                                          out_channels=self.downsample_dim,
                                           dropout=dropout,
                                           node_types=node_types,
                                           edge_types=edge_types,
@@ -170,5 +185,19 @@ class HeteroGraphSAGE(torch.nn.Module):
         for i, conv in enumerate(self.conv_layers):
             x_dict = conv(x_dict, edge_index_dict)
 
-        return x_dict[self.target_node_type], decoder_temporal_vars_dict, decoder_static_vars_dict
+        if self.downsample_factor > 1:
+            # redim target
+            x_target = apply_time_distributed(self.upsample_layer, x_dict[self.target_node_type])
+
+            # redim decoder_temporal_vars
+            for node_type, x in decoder_temporal_vars_dict.items():
+                decoder_temporal_vars_dict[node_type] = self.upsample_feat_dict[node_type](x)
+
+            # redim static/global vars
+            for node_type, x in decoder_static_vars_dict.items():
+                decoder_static_vars_dict[node_type] = self.upsample_feat_dict[node_type](x)
+        else:
+            x_target = x_dict[self.target_node_type]
+
+        return x_target, decoder_temporal_vars_dict, decoder_static_vars_dict
 

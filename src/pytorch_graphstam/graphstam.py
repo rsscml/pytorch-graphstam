@@ -69,6 +69,7 @@ class gml(object):
         recency_alpha = self.data_config.get("recency_alpha", 1)
         hierarchical_weights = self.data_config.get("hierarchical_weights", True)
         data_parallel_processes = int(os.cpu_count() / 1.5)
+        pin_graph_in_memory = self.data_config.get("pin_graph_in_memory", True)
 
         # create graphmodel object
         if self.model_type == 'GraphTFT':
@@ -108,6 +109,7 @@ class gml(object):
                                    recency_weights = recency_weights,
                                    recency_alpha = recency_alpha,
                                    output_clipping = False,         # UNUSED
+                                   pin_graph_in_memory = pin_graph_in_memory,
                                    PARALLEL_DATA_JOBS = data_parallel_processes,
                                    PARALLEL_DATA_JOBS_BATCHSIZE = 128)
 
@@ -148,6 +150,7 @@ class gml(object):
                                       recency_weights = recency_weights,
                                       recency_alpha = recency_alpha,
                                       output_clipping = False,
+                                      pin_graph_in_memory = pin_graph_in_memory,
                                       PARALLEL_DATA_JOBS = data_parallel_processes,
                                       PARALLEL_DATA_JOBS_BATCHSIZE = 128)
 
@@ -188,6 +191,7 @@ class gml(object):
                                       recency_weights = recency_weights,
                                       recency_alpha = recency_alpha,
                                       output_clipping = False,
+                                      pin_graph_in_memory = pin_graph_in_memory,
                                       PARALLEL_DATA_JOBS = data_parallel_processes,
                                       PARALLEL_DATA_JOBS_BATCHSIZE = 128)
 
@@ -212,6 +216,7 @@ class gml(object):
         forecast_quantiles = self.model_config.get("forecast_quantiles", [0.5])
         dropout = self.model_config.get("dropout", 0)
         chunk_size = self.model_config.get("chunk_size", None)
+        downsample_factor = self.model_config.get("downsample_factor", 1)
         skip_connection = self.model_config.get("skip_connection", False)
         feature_transform = self.model_config.get("feature_transform", True)
         device = self.model_config.get("device", 'cuda')
@@ -229,6 +234,7 @@ class gml(object):
                               forecast_quantiles=forecast_quantiles,
                               dropout=dropout,
                               chunk_size=chunk_size,
+                              downsample_factor=downsample_factor,
                               device=device,
                               gbt=gbt,
                               n_boosters=n_boosters,
@@ -284,6 +290,9 @@ class gml(object):
         min_delta = self.train_config.get("min_delta", 0)
         model_prefix = self.train_config.get("model_prefix", f"{self.model_type}")
         loss = self.train_config.get("loss_type", 'Quantile')
+        use_normalized_multi_loss = self.train_config.get("use_normalized_multi_loss", False)
+        beta = self.train_config.get("beta", 0.9)
+        ema_iterations = self.train_config.get("ema_iterations", 10)
         delta = self.train_config.get("huber_delta", 0.5)
         use_amp = self.train_config.get("use_amp", False)
         use_lr_scheduler = self.train_config.get("use_lr_scheduler", True)
@@ -303,12 +312,33 @@ class gml(object):
                                       model_prefix=f"{self.project_dir}/models/{model_prefix}",
                                       max_batch_size=max_batch_size,
                                       loss_type=loss,
+                                      use_normalized_multi_loss=use_normalized_multi_loss,
+                                      beta=beta,
+                                      ema_iterations=ema_iterations,
                                       delta=delta,
                                       use_amp=use_amp,
                                       use_lr_scheduler=use_lr_scheduler,
                                       scheduler_params=scheduler_params,
                                       sample_weights=sample_weights,
                                       stop_training_criteria=stop_training_criteria)
+
+        elif (self.model_type == 'GraphTFT') or (self.model_type == 'GraphSeq2Seq'):
+            self.gmlobj.train(lr=lr,
+                              min_epochs=min_epochs,
+                              max_epochs=max_epochs,
+                              patience=patience,
+                              min_delta=min_delta,
+                              model_prefix=f"{self.project_dir}/models/{model_prefix}",
+                              loss_type=loss,
+                              use_normalized_multi_loss=use_normalized_multi_loss,
+                              beta=beta,
+                              ema_iterations=ema_iterations,
+                              delta=delta,
+                              use_amp=use_amp,
+                              use_lr_scheduler=use_lr_scheduler,
+                              scheduler_params=scheduler_params,
+                              sample_weights=sample_weights,
+                              stop_training_criteria=stop_training_criteria)
 
         else:
             self.gmlobj.train(lr=lr,

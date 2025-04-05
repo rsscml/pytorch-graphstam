@@ -126,6 +126,7 @@ class graphmodel:
                  recency_weights=False,
                  recency_alpha=0,
                  output_clipping=False,
+                 pin_graph_in_memory=True,
                  PARALLEL_DATA_JOBS=4,
                  PARALLEL_DATA_JOBS_BATCHSIZE=128):
 
@@ -193,6 +194,7 @@ class graphmodel:
         self.recency_weights = recency_weights
         self.recency_alpha = recency_alpha
         self.output_clipping = output_clipping
+        self.pin_graph_in_memory = pin_graph_in_memory
         self.PARALLEL_DATA_JOBS = PARALLEL_DATA_JOBS
         self.PARALLEL_DATA_JOBS_BATCHSIZE = PARALLEL_DATA_JOBS_BATCHSIZE
         self.pad_constant = 0
@@ -1695,7 +1697,8 @@ class graphmodel:
 
     def batch_generator(self, graph_dataset, mode, device):
         graph = next(iter(graph_dataset))
-        # graph = graph.to(device)
+        if self.pin_graph_in_memory:
+            graph = graph.to(device)
         # get start & end of indices for iterating
         max_seq_len = graph.x_dict[self.target_col].shape[1]
         context_len = int(self.max_target_lags + self.lag_offset)
@@ -1884,7 +1887,10 @@ class graphmodel:
               min_delta,
               model_prefix,
               loss_type='Quantile',  # 'Tweedie','Huber','RMSE'
+              use_normalized_multi_loss=False,
               delta=1.0,  # for Huber
+              beta=0.9,  # for normalized loss
+              ema_iterations=10,  # for normalized loss
               use_amp=False,
               use_lr_scheduler=True,
               scheduler_params=None,
@@ -1919,6 +1925,19 @@ class graphmodel:
             loss_fn = RMSE()
         elif self.loss == 'Huber':
             loss_fn = Huber(delta=delta)
+
+        if use_normalized_multi_loss:
+            # Aggregate loss across forecast horizon
+            if self.loss == 'RMSE':
+                total_loss_fn = RMSE()
+            elif self.loss == 'Quantile':
+                total_loss_fn = QuantileLoss(quantiles=self.forecast_quantiles)
+            elif self.loss == 'Huber':
+                total_loss_fn = Huber(delta=2*delta)
+            else:
+                total_loss_fn = QuantileLoss(quantiles=[0.5])
+            # Normalized Loss fn
+            normalized_loss_fn = NormalizedMultiLoss(alpha=0.5, beta=beta, ema_iterations=ema_iterations)
 
         if model_type == 'base':
             optimizer = torch.optim.Adam(self.base_model.parameters(), lr=lr)
@@ -1980,7 +1999,8 @@ class graphmodel:
             batch_gen = self.batch_generator(self.train_dataset, 'train', self.device)
 
             for i, batch in enumerate(batch_gen):
-                batch = batch.to(self.device)
+                if not self.pin_graph_in_memory:
+                    batch = batch.to(self.device)
                 if not self.grad_accum:
                     optimizer.zero_grad()
 
@@ -2029,7 +2049,20 @@ class graphmodel:
                 else:
                     recency_wt = 1
 
-                weighted_loss = torch.mean(loss * mask * outlier_mask * (wt + key_level_wt) * recency_wt)
+                if use_normalized_multi_loss:
+                    # Weighted timestep loss
+                    weighted_timestep_loss = torch.mean(loss * mask * outlier_mask * (wt + key_level_wt) * recency_wt)
+                    # aggregate Loss
+                    out_total = torch.sum(out, dim=1, keepdim=True)
+                    target_total = torch.sum(batch[self.target_col].y, dim=1, keepdim=True)
+                    aggregate_loss = total_loss_fn.loss(out_total, target_total)
+                    # Weighted aggregate loss
+                    weighted_agg_loss = torch.mean(aggregate_loss * (wt + key_level_wt) * recency_wt)
+                    # Normalized Loss
+                    weighted_loss = normalized_loss_fn.loss(weighted_timestep_loss, weighted_agg_loss)
+                else:
+                    # Weighted timestep loss
+                    weighted_loss = torch.mean(loss * mask * outlier_mask * (wt + key_level_wt) * recency_wt)
 
                 # metric
                 if self.loss == 'Tweedie':
@@ -2081,7 +2114,8 @@ class graphmodel:
 
             with torch.no_grad():
                 for i, batch in enumerate(batch_gen):
-                    batch = batch.to(self.device)
+                    if not self.pin_graph_in_memory:
+                        batch = batch.to(self.device)
                     batch_size = batch.num_graphs
                     out = model(batch.x_dict, batch.edge_index_dict)
 
@@ -2124,7 +2158,20 @@ class graphmodel:
                     else:
                         recency_wt = 1
 
-                    weighted_loss = torch.mean(loss * mask * (wt + key_level_wt) * recency_wt)
+                    if use_normalized_multi_loss:
+                        # Weighted timestep loss
+                        weighted_timestep_loss = torch.mean(loss * mask * (wt + key_level_wt) * recency_wt)
+                        # aggregate Loss
+                        out_total = torch.sum(out, dim=1, keepdim=True)
+                        target_total = torch.sum(batch[self.target_col].y, dim=1, keepdim=True)
+                        aggregate_loss = total_loss_fn.loss(out_total, target_total)
+                        # Weighted aggregate loss
+                        weighted_agg_loss = torch.mean(aggregate_loss * (wt + key_level_wt) * recency_wt)
+                        # Normalized Loss
+                        weighted_loss = normalized_loss_fn.loss(weighted_timestep_loss, weighted_agg_loss)
+                    else:
+                        # Weighted timestep loss
+                        weighted_loss = torch.mean(loss * mask * (wt + key_level_wt) * recency_wt)
 
                     # metric
                     if self.loss == 'Tweedie':
@@ -2157,7 +2204,8 @@ class graphmodel:
             batch_gen = self.batch_generator(self.train_dataset, 'train', self.device)
 
             for i, batch in enumerate(batch_gen):
-                batch = batch.to(self.device)
+                if not self.pin_graph_in_memory:
+                    batch = batch.to(self.device)
                 if not self.grad_accum:
                     optimizer.zero_grad()
                 batch_size = batch.num_graphs
@@ -2186,6 +2234,7 @@ class graphmodel:
                         loss = loss_fn.loss(out, y)
 
                     mask = torch.unsqueeze(batch[self.target_col].y_mask, dim=2)
+                    outlier_mask = torch.unsqueeze(batch[self.target_col].y_outlier_mask, dim=2)
 
                     # key weight
                     if sample_weights:
@@ -2205,7 +2254,20 @@ class graphmodel:
                     else:
                         recency_wt = 1
 
-                    weighted_loss = torch.mean(loss * mask * (wt + key_level_wt) * recency_wt)
+                    if use_normalized_multi_loss:
+                        # Weighted timestep loss
+                        weighted_timestep_loss = torch.mean(loss * mask * outlier_mask * (wt + key_level_wt) * recency_wt)
+                        # aggregate Loss
+                        out_total = torch.sum(out, dim=1, keepdim=True)
+                        target_total = torch.sum(batch[self.target_col].y, dim=1, keepdim=True)
+                        aggregate_loss = total_loss_fn.loss(out_total, target_total)
+                        # Weighted aggregate loss
+                        weighted_agg_loss = torch.mean(aggregate_loss * (wt + key_level_wt) * recency_wt)
+                        # Normalized Loss
+                        weighted_loss = normalized_loss_fn.loss(weighted_timestep_loss, weighted_agg_loss)
+                    else:
+                        # Weighted timestep loss
+                        weighted_loss = torch.mean(loss * mask * outlier_mask * (wt + key_level_wt) * recency_wt)
 
                     # metric
                     if self.loss == 'Tweedie':
@@ -2262,7 +2324,8 @@ class graphmodel:
             batch_gen = self.batch_generator(self.test_dataset, 'test', self.device)
             with torch.no_grad():
                 for i, batch in enumerate(batch_gen):
-                    batch = batch.to(self.device)
+                    if not self.pin_graph_in_memory:
+                        batch = batch.to(self.device)
                     batch_size = batch.num_graphs
                     if self.loss == 'Tweedie' and self.estimate_tweedie_p:
                         tvp = batch[self.target_col].tvp
@@ -2306,7 +2369,21 @@ class graphmodel:
                         else:
                             recency_wt = 1
 
-                        weighted_loss = torch.mean(loss * mask * (wt + key_level_wt) * recency_wt)
+                        if use_normalized_multi_loss:
+                            # Weighted timestep loss
+                            weighted_timestep_loss = torch.mean(loss * mask * (wt + key_level_wt) * recency_wt)
+                            # aggregate Loss
+                            out_total = torch.sum(out, dim=1, keepdim=True)
+                            target_total = torch.sum(batch[self.target_col].y, dim=1, keepdim=True)
+                            aggregate_loss = total_loss_fn.loss(out_total, target_total)
+                            # Weighted aggregate loss
+                            weighted_agg_loss = torch.mean(aggregate_loss * (wt + key_level_wt) * recency_wt)
+                            # Normalized Loss
+                            weighted_loss = normalized_loss_fn.loss(weighted_timestep_loss, weighted_agg_loss)
+                        else:
+                            # Weighted timestep loss
+                            weighted_loss = torch.mean(loss * mask * (wt + key_level_wt) * recency_wt)
+
                         # metric
                         if self.loss == 'Tweedie':
                             out = torch.exp(out) * torch.unsqueeze(batch['scaler'].x, dim=2)
@@ -2421,6 +2498,9 @@ class graphmodel:
                   min_delta,
                   model_prefix,
                   loss_type='Quantile',  # 'Tweedie','Quantile,'RMSE','Huber'
+                  use_normalized_multi_loss=False,
+                  beta=0.9,
+                  ema_iterations=10,
                   delta=1.0,  # for Huber
                   use_amp=False,
                   use_lr_scheduler=True,
@@ -2439,6 +2519,9 @@ class graphmodel:
                                           min_delta=min_delta,
                                           model_prefix=model_prefix + '_base',
                                           loss_type=loss_type,  # 'Tweedie','Quantile,'RMSE','Huber'
+                                          use_normalized_multi_loss=use_normalized_multi_loss,
+                                          beta=beta,
+                                          ema_iterations=ema_iterations,
                                           delta=delta,  # for Huber
                                           use_amp=use_amp,
                                           use_lr_scheduler=use_lr_scheduler,
@@ -2459,6 +2542,9 @@ class graphmodel:
                                              min_delta=min_delta,
                                              model_prefix=model_prefix + m_name,
                                              loss_type=loss_type,
+                                             use_normalized_multi_loss=use_normalized_multi_loss,
+                                             beta=beta,
+                                             ema_iterations=ema_iterations,
                                              delta=delta,
                                              use_amp=use_amp,
                                              use_lr_scheduler=use_lr_scheduler,
