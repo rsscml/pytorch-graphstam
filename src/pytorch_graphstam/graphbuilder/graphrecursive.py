@@ -1896,8 +1896,7 @@ class graphmodel:
                                                                    threshold_mode='rel',
                                                                    cooldown=0,
                                                                    min_lr=scheduler_params['min_lr'],
-                                                                   eps=1e-08,
-                                                                   verbose=False)
+                                                                   eps=1e-08)
         # init training data structures & vars
         model_list = []
         best_model = None
@@ -1914,7 +1913,7 @@ class graphmodel:
         if model_type == 'boost':
 
             def base_output(batch):
-                self.base_model.load_state_dict(torch.load(self.best_base_model))
+                self.base_model.load_state_dict(torch.load(self.best_base_model, weights_only=False))
                 self.base_model.eval()
                 with torch.no_grad():
                     out = self.base_model(batch.x_dict, batch.edge_index_dict)
@@ -1924,7 +1923,7 @@ class graphmodel:
                 y_hat = base_output(batch)
                 for i in range(boost_model_num):
                     if i>0:
-                        self.boost_model_dict[f"boost_model_{i}"].load_state_dict(torch.load(self.best_boost_model_dict[f"boost_model_{i}"]))
+                        self.boost_model_dict[f"boost_model_{i}"].load_state_dict(torch.load(self.best_boost_model_dict[f"boost_model_{i}"], weights_only=False))
                         self.boost_model_dict[f"boost_model_{i}"].eval()
                         with torch.no_grad():
                             yi_hat = self.boost_model_dict[f"boost_model_{i}"](batch.x_dict, batch.edge_index_dict)
@@ -2373,7 +2372,7 @@ class graphmodel:
 
     def change_device(self, device='cpu'):
         self.device = torch.device(device)
-        self.base_model.load_state_dict(torch.load(self.best_base_model, map_location=self.device))
+        self.base_model.load_state_dict(torch.load(self.best_base_model, map_location=self.device, weights_only=False))
 
     def disable_cuda_backend(self, ):
         self.change_device(device="cuda")
@@ -2454,7 +2453,7 @@ class graphmodel:
 
         # infer fn
         def infer_fn(model, model_path, infer_data):
-            model.load_state_dict(torch.load(model_path))
+            model.load_state_dict(torch.load(model_path, weights_only=False))
             model.eval()
             output = []
             # create batch generator
@@ -2556,7 +2555,7 @@ class graphmodel:
 
         # infer fn
         def infer_fn(model, model_path, infer_data):
-            model.load_state_dict(torch.load(model_path))
+            model.load_state_dict(torch.load(model_path, weights_only=False))
             model.eval()
             output = []
             # create batch generator
