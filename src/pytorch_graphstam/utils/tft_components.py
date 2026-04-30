@@ -975,7 +975,7 @@ class AttentionStack(nn.Module):
         self.dropout_rate = dropout_rate
         self.num_layers = num_layers
         self.hidden_layer_size = hidden_layer_size
-        self.attn_layers = [AttentionLayer(hidden_layer_size, device, n_head, dropout_rate) for _ in range(num_layers)]
+        self.attn_layers = nn.ModuleList([AttentionLayer(hidden_layer_size, device, n_head, dropout_rate) for _ in range(num_layers)])
         self.device = device
         self.grn_final = TFTGRNLayer(hidden_layer_size=hidden_layer_size,
                                      output_size=None,
@@ -1051,7 +1051,7 @@ class MHA(nn.Module):
         self.dropout_rate = dropout_rate
         self.num_layers = num_layers
         self.hidden_layer_size = hidden_layer_size
-        self.attn_layers = [nn.MultiheadAttention(embed_dim=hidden_layer_size, num_heads=n_head, dropout=dropout_rate, bias=True, batch_first=True).to(device) for _ in range(num_layers)]
+        self.attn_layers = nn.ModuleList([nn.MultiheadAttention(embed_dim=hidden_layer_size, num_heads=n_head, dropout=dropout_rate, bias=True, batch_first=True).to(device) for _ in range(num_layers)])
         self.device = device
         self.grn_final = TFTGRNLayer(hidden_layer_size=hidden_layer_size,
                                      output_size=None,
