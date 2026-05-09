@@ -128,17 +128,15 @@ class TFTMultiHeadAttention(nn.Module):
         self.d_k = self.d_v = d_model // n_head
         self.dropout_rate = dropout_rate
 
-        # Per-head Q and K projections.
-        self.qs_layers = nn.ModuleList([nn.Linear(d_model, self.d_k, bias=False) for _ in range(n_head)])
-        self.ks_layers = nn.ModuleList([nn.Linear(d_model, self.d_k, bias=False) for _ in range(n_head)])
-        # Single V projection shared across heads (the "interpretable" MHA
-        # construction from the TFT paper). Computed once outside the loop.
-        self.vs_layer = nn.Linear(d_model, self.d_v, bias=False)
+        # We replicate your code: same vs_layer across all heads
+        self.qs_layers = nn.ModuleList([nn.Linear(d_model, self.d_k, bias=False) for _ in range(n_head)]).to(self.device)
+        self.ks_layers = nn.ModuleList([nn.Linear(d_model, self.d_k, bias=False) for _ in range(n_head)]).to(self.device)
+        # One vs_layer shared by all heads
+        vs_layer = nn.Linear(d_model, self.d_v, bias=False).to(self.device)
+        self.vs_layers = nn.ModuleList([vs_layer for _ in range(n_head)])
 
         self.dropout = nn.Dropout(dropout_rate)
-        # Output projection takes per-head width d_v (heads are averaged, not
-        # concatenated, so input is d_v not d_model).
-        self.w_o = nn.Linear(self.d_v, d_model, bias=False)
+        self.w_o = nn.Linear(d_model, d_model, bias=False).to(self.device)
 
     def forward(self, q, k, v, causal_mask=None, padding_mask=None):
         """
@@ -152,12 +150,10 @@ class TFTMultiHeadAttention(nn.Module):
         heads = []
         attns = []
 
-        # V is shared across heads, so project once.
-        vs = self.vs_layer(v)  # [B, T, d_v]
-
         for i in range(self.n_head):
             qs = self.qs_layers[i](q)  # [B, T, d_k]
             ks = self.ks_layers[i](k)  # [B, T, d_k]
+            vs = self.vs_layers[i](v)  # [B, T, d_v]
 
             head, attn = scaled_dot_product_attention(qs, ks, vs, causal_mask, padding_mask)
             head = self.dropout(head)  # dropout on each head
@@ -165,16 +161,22 @@ class TFTMultiHeadAttention(nn.Module):
             attns.append(attn)
 
         # Stack heads => shape [n_head, B, T, d_v]
-        heads = torch.stack(heads, dim=0)  # (n_head, B, T, d_v)
-        attns = torch.stack(attns, dim=0)  # (n_head, B, T, T)
+        head = torch.stack(heads, dim=0)  # (n_head, B, T, d_v)
+        attn = torch.stack(attns, dim=0)  # (n_head, B, T, T)
+        #print("head : ", head.shape)
+        #print("attn : ", attn.shape)
+        # Average across heads => shape [B, T, d_v]
+        # ( or you could concatenate them if you prefer the standard MHA practice,
+        #   but your code does reduce_mean across heads)
+        if self.n_head > 1:
+            out = torch.mean(head, dim=0)  # [B, T, d_v]
+        else:
+            out = head.squeeze(0)  # [B, T, d_v]
 
-        # Average across heads => [B, T, d_v]. mean(dim=0) handles n_head==1
-        # correctly, so no branch needed.
-        out = heads.mean(dim=0)
-        out = self.w_o(out)  # [B, T, d_model]
+        out = self.w_o(out)  # project back to d_model
         out = self.dropout(out)
 
-        return out, attns
+        return out, attn
 
 
 ##################################################
@@ -205,26 +207,39 @@ class TFTLinearLayer(nn.Module):
     """
     Equivalent to 'tft_linear_layer' in Keras code:
     A Dense layer with optional time-distribution and optional activation.
-
-    Eagerly constructed with a known input_size so that all parameters are
-    visible to torch.optim / torch.nn.parallel from the moment the module
-    is instantiated.
     """
 
-    def __init__(self, hidden_layer_size, input_size, device,
-                 activation=None, use_time_distributed=False, use_bias=True):
+    def __init__(self, hidden_layer_size, device, activation=None, use_time_distributed=False, use_bias=True):
         super().__init__()
         self.use_time_distributed = use_time_distributed
         self.device = device
+        self.layer = nn.Linear(in_features=0, out_features=0, bias=use_bias).to(self.device)
+        # Will set in_features dynamically at forward if desired (or pass it in the init).
+        # For simplicity, we assume you know the in_features at construction time in real usage.
+
         self.hidden_layer_size = hidden_layer_size
-        self.layer = nn.Linear(input_size, hidden_layer_size, bias=use_bias)
         self.activation_fn = get_activation_fn(activation)
 
+        # We will build the linear layer on-the-fly once we see the input dimension
+        # if you need strict initialization, you can do so after knowing input_dim.
+
     def forward(self, x):
+        # If we haven't set the in_features/out_features yet, do so here
+        if self.layer.in_features == 0:
+            # x shape: [B, T, in_features] or [B, in_features]
+            if x.ndimension() == 3:
+                # [B, T, F]
+                in_features = x.shape[-1]
+            else:
+                # [B, F]
+                in_features = x.shape[-1]
+            self.layer = nn.Linear(in_features, self.hidden_layer_size, bias=self.layer.bias is not None).to(self.device)
+
         if self.use_time_distributed:
             out = apply_time_distributed(self.layer, x)
         else:
             out = self.layer(x)
+
         if self.activation_fn is not None:
             out = self.activation_fn(out)
         return out
@@ -279,20 +294,17 @@ class TFTApplyMLP(nn.Module):
 class TFTApplyGatingLayer(nn.Module):
     """
     Equivalent to 'tft_apply_gating_layer'.
-
-    Eagerly constructed with a known input_size.
     """
 
-    def __init__(self, hidden_layer_size, input_size, device,
-                 dropout_rate=0.0, use_time_distributed=True, activation=None):
+    def __init__(self, hidden_layer_size, device, dropout_rate=0.0, use_time_distributed=True, activation=None):
         super().__init__()
         self.dropout = nn.Dropout(dropout_rate)
         self.use_time_distributed = use_time_distributed
         self.device = device
         self.hidden_layer_size = hidden_layer_size
 
-        self.activation_fc = nn.Linear(input_size, hidden_layer_size)
-        self.gated_fc = nn.Linear(input_size, hidden_layer_size)
+        self.activation_fc = nn.Linear(in_features=0, out_features=0).to(self.device)
+        self.gated_fc = nn.Linear(in_features=0, out_features=0).to(self.device)
 
         if activation is None:
             self.activation_fn = None
@@ -303,6 +315,18 @@ class TFTApplyGatingLayer(nn.Module):
             raise ValueError(f"Unsupported activation {activation}")
 
     def forward(self, x):
+        # If we haven't set the in_features/out_features yet, do so here
+        if self.activation_fc.in_features == 0:
+            # x shape: [B, T, in_features] or [B, in_features]
+            if x.ndimension() == 3:
+                # [B, T, F]
+                in_features = x.shape[-1]
+            else:
+                # [B, F]
+                in_features = x.shape[-1]
+            self.activation_fc = nn.Linear(in_features, self.hidden_layer_size).to(self.device)
+            self.gated_fc = nn.Linear(in_features, self.hidden_layer_size).to(self.device)
+
         x = self.dropout(x)
         if self.use_time_distributed:
             a = apply_time_distributed(self.activation_fc, x)
@@ -322,19 +346,25 @@ class TFTApplyGatingLayer(nn.Module):
 class TFTAddAndNormLayer(nn.Module):
     """
     Equivalent to 'tft_add_and_norm_layer'.
-
-    Eagerly constructed with a known normalized_shape.
     """
 
-    def __init__(self, device, normalized_shape):
+    def __init__(self, device):
         super().__init__()
         self.device = device
-        self.layer_norm = nn.LayerNorm(normalized_shape)
+        self.layer_norm = None  # We'll build dynamically based on last dimension
 
     def forward(self, inputs):
         # inputs is a list or tuple: [skip, gating_layer]
         skip, gating_layer = inputs
-        return self.layer_norm(skip + gating_layer)
+        out = skip + gating_layer
+
+        if self.layer_norm is None:
+            # Build LayerNorm if needed, expecting to normalize over last dim
+            norm_shape = out.shape[-1]
+            self.layer_norm = nn.LayerNorm(norm_shape).to(self.device)
+
+        out = self.layer_norm(out)
+        return out
 
 
 class TFTGRNLayer(nn.Module):
@@ -358,36 +388,23 @@ class TFTGRNLayer(nn.Module):
         self.return_gate = return_gate
         self.device = device
 
-        # Input size to the GRN's main path. When output_size is explicitly
-        # set (e.g. grn_flat in a VSN), the input is the concatenation of
-        # output_size variables of size hidden_layer_size each, so the
-        # incoming tensor's last dim is hidden_layer_size * output_size.
-        # Otherwise, the input is a single hidden_layer_size-dim vector.
-        grn_input_size = (hidden_layer_size * self.output_size
-                          if output_size is not None
-                          else hidden_layer_size)
-
         # Main linear (skip connection)
-        self.skip_layer = nn.Linear(grn_input_size, self.output_size)
+        input_size = hidden_layer_size*self.output_size if output_size is not None else hidden_layer_size
+        self.skip_layer = nn.Linear(input_size, self.output_size)
 
         # Hidden layers
         self.hidden_1 = TFTLinearLayer(hidden_layer_size=hidden_layer_size,
-                                       input_size=grn_input_size,
                                        activation=None,
                                        use_time_distributed=use_time_distributed,
                                        device=self.device)
 
         self.hidden_2 = TFTLinearLayer(hidden_layer_size=hidden_layer_size,
-                                       input_size=hidden_layer_size,
                                        activation=None,
                                        use_time_distributed=use_time_distributed,
                                        device=self.device)
 
         if additional_context:
-            # Context vectors in this codebase always come from StaticContexts
-            # (a TFTGRNLayer with output_size=None), so their dim is hidden_layer_size.
             self.context_layer = TFTLinearLayer(hidden_layer_size=hidden_layer_size,
-                                                input_size=hidden_layer_size,
                                                 activation=None,
                                                 use_time_distributed=use_time_distributed,
                                                 device=self.device,
@@ -395,18 +412,15 @@ class TFTGRNLayer(nn.Module):
         else:
             self.context_layer = None
 
-        # Gate. Note: the gate's output dim is self.output_size, but its
-        # input dim is hidden_layer_size (it consumes hidden_2's output).
+        # Gate
         self.gate = TFTApplyGatingLayer(hidden_layer_size=self.output_size,
-                                        input_size=hidden_layer_size,
                                         dropout_rate=dropout_rate,
                                         use_time_distributed=use_time_distributed,
                                         activation=None,
                                         device=self.device)
 
         # Add & Norm
-        self.add_norm = TFTAddAndNormLayer(device=self.device,
-                                           normalized_shape=self.output_size)
+        self.add_norm = TFTAddAndNormLayer(device=self.device)
 
     def forward(self, inputs):
         """
@@ -495,17 +509,9 @@ class VariableSelectionStatic(nn.Module):
         """
         inputs: list of static vars, each shape [B, var_dim].
         We concatenate => [B, sum_of_var_dims].
-
-        Note: build_layers must be called before forward (typically eagerly
-        from the parent module's __init__) so that all parameters exist
-        before the optimizer is constructed.
         """
         if self.grn_flat is None:
-            raise RuntimeError(
-                "VariableSelectionStatic.build_layers(num_vars=...) must be "
-                "called before forward. Construct the parent module so it "
-                "calls build_layers in __init__."
-            )
+            self.build_layers(num_vars=len(inputs))
 
         flatten = torch.cat(inputs, dim=1)  # [B, sum_of_var_dims]
         mlp_outputs = self.grn_flat(flatten)  # [B, num_vars]
@@ -636,26 +642,20 @@ class VariableSelectionTemporal(nn.Module):
          - else, list_of_tensors
         list_of_tensors: each shape [B, T, dim_i]
         context: shape [B, context_dim]
-
-        Note: build_layers must be called before forward (typically eagerly
-        from the parent module's __init__) so that all parameters exist
-        before the optimizer is constructed.
         """
-        if self.grn_flat is None:
-            raise RuntimeError(
-                "VariableSelectionTemporal.build_layers(num_vars=...) must be "
-                "called before forward. Construct the parent module so it "
-                "calls build_layers in __init__."
-            )
-
         if self.static_context:
             inputs, context = x
+            if self.grn_flat is None:
+                self.build_layers(len(inputs))
+
             # Expand context => [B, 1, context_dim]
             context = context.unsqueeze(1)
             flatten = torch.cat(inputs, dim=-1)  # [B, T, sum_of_dims]
             mlp_outputs = self.grn_flat((flatten, context))
         else:
             inputs = x
+            if self.grn_flat is None:
+                self.build_layers(len(inputs))
             flatten = torch.cat(inputs, dim=-1)  # [B, T, sum_of_dims]
             mlp_outputs = self.grn_flat(flatten)
 
@@ -706,14 +706,12 @@ class LSTMLayer(nn.Module):
                                    batch_first=True)
 
         self.gate = TFTApplyGatingLayer(hidden_layer_size=self.hidden_layer_size,
-                                        input_size=self.hidden_layer_size,
                                         dropout_rate=self.dropout_rate,
                                         use_time_distributed=True,
                                         activation=None,
                                         device=self.device)
 
-        self.add_norm = TFTAddAndNormLayer(device=self.device,
-                                           normalized_shape=self.hidden_layer_size)
+        self.add_norm = TFTAddAndNormLayer(device=self.device)
 
     def forward(self, inputs):
         """
@@ -767,14 +765,12 @@ class LSTMLayerDeepAR(nn.Module):
                                    batch_first=True)
 
         self.gate = TFTApplyGatingLayer(hidden_layer_size=self.hidden_layer_size,
-                                        input_size=self.hidden_layer_size,
                                         dropout_rate=self.dropout_rate,
                                         use_time_distributed=True,
                                         activation=None,
                                         device=self.device)
 
-        self.add_norm = TFTAddAndNormLayer(device=self.device,
-                                           normalized_shape=self.hidden_layer_size)
+        self.add_norm = TFTAddAndNormLayer(device=self.device)
 
     def forward(self, inputs):
         """
@@ -846,14 +842,12 @@ class CNNLayer(nn.Module):
         # Gating & add-norm layers remain the same
         self.gate = TFTApplyGatingLayer(
             hidden_layer_size=self.hidden_layer_size,
-            input_size=self.hidden_layer_size,
             dropout_rate=self.dropout_rate,
             use_time_distributed=True,
             activation=None,
             device=self.device
         )
-        self.add_norm = TFTAddAndNormLayer(device=self.device,
-                                           normalized_shape=self.hidden_layer_size)
+        self.add_norm = TFTAddAndNormLayer(device=self.device)
 
     def forward(self, inputs):
         """
@@ -955,13 +949,11 @@ class AttentionLayer(nn.Module):
         self.device = device
         self.mha = TFTMultiHeadAttention(n_head=n_head, d_model=hidden_layer_size, dropout_rate=dropout_rate, device=self.device)
         self.gate = TFTApplyGatingLayer(hidden_layer_size=hidden_layer_size,
-                                        input_size=hidden_layer_size,
                                         dropout_rate=dropout_rate,
                                         use_time_distributed=True,
                                         activation=None,
                                         device=self.device)
-        self.add_norm = TFTAddAndNormLayer(device=self.device,
-                                           normalized_shape=hidden_layer_size)
+        self.add_norm = TFTAddAndNormLayer(device=self.device)
 
     def forward(self, x, attn_mask, padding_mask):
 
@@ -1015,13 +1007,11 @@ class FinalGatingLayer(nn.Module):
         self.dropout_rate = dropout_rate
         self.device = device
         self.gate = TFTApplyGatingLayer(hidden_layer_size=hidden_layer_size,
-                                        input_size=hidden_layer_size,
                                         dropout_rate=dropout_rate,
                                         use_time_distributed=True,
                                         activation=None,
                                         device=self.device)
-        self.add_norm = TFTAddAndNormLayer(device=self.device,
-                                           normalized_shape=hidden_layer_size)
+        self.add_norm = TFTAddAndNormLayer(device=self.device)
 
     def forward(self, inputs):
 
